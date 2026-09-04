@@ -1,0 +1,10 @@
+entry.sh: RANK=3 WORLD_SIZE=4 MASTER_ADDR=<MGMT_IP_RANK0> MASTER_PORT=29521 LOCAL_RANK=0
+entry.sh: (MASTER_PORT = launcher --master-port 29520 + 1, to avoid a stale vLLM rendez-vous)
+[rank3]:[W903 16:11:05.269062885 ProcessGroupNCCL.cpp:5276] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()
+[NCCL-RELAY] discover: NIC rocep1s0f0 ip=<FABRIC_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: NIC rocep1s0f1 ip=<FABRIC_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: NIC roceP2p1s0f0 ip=<LINK_LOCAL_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: NIC roceP2p1s0f1 ip=<LINK_LOCAL_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: 4 RoCE NIC(s) usable
+[NCCL-RELAY] RING: could not detect local rank from NIC IPs; relay disabled
+rank 3 done

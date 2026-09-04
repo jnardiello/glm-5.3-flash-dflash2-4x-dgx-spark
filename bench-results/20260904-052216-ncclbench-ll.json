@@ -1,0 +1,100 @@
+[
+  {
+    "bytes": 8192,
+    "med_us_sync": 46.728,
+    "p90_us_sync": 50.432,
+    "batched_us": 35.066,
+    "busbw_gbit": 2.803,
+    "iters": 200,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  },
+  {
+    "bytes": 32768,
+    "med_us_sync": 57.584,
+    "p90_us_sync": 61.167,
+    "batched_us": 43.29,
+    "busbw_gbit": 9.083,
+    "iters": 200,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  },
+  {
+    "bytes": 131072,
+    "med_us_sync": 92.415,
+    "p90_us_sync": 95.647,
+    "batched_us": 86.122,
+    "busbw_gbit": 18.263,
+    "iters": 200,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  },
+  {
+    "bytes": 1048576,
+    "med_us_sync": 314.415,
+    "p90_us_sync": 409.455,
+    "batched_us": 292.002,
+    "busbw_gbit": 43.092,
+    "iters": 200,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  },
+  {
+    "bytes": 16777216,
+    "med_us_sync": 4478.008,
+    "p90_us_sync": 4784.992,
+    "batched_us": 4460.392,
+    "busbw_gbit": 45.137,
+    "iters": 200,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  },
+  {
+    "bytes": 67108864,
+    "med_us_sync": 18613.713,
+    "p90_us_sync": 18843.952,
+    "batched_us": 18052.242,
+    "busbw_gbit": 44.61,
+    "iters": 200,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  },
+  {
+    "bytes": 314572800,
+    "med_us_sync": 85187.541,
+    "p90_us_sync": 85562.668,
+    "batched_us": 84588.162,
+    "busbw_gbit": 44.626,
+    "iters": 20,
+    "world": 4,
+    "nccl_version": [
+      2,
+      29,
+      7
+    ]
+  }
+]

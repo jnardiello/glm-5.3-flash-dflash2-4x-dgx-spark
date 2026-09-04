@@ -1,0 +1,14 @@
+2026-09-03T16:12:06Z START smoke
+2026-09-03T16:40:41Z KILLED by operator for H3 reboots (smoke incomplete)
+2026-09-03T17:11:30Z RESTART chain after H3 reboots
+2026-09-03T17:11:30Z START smoke
+2026-09-03T18:42:44Z KILLED smoke at 91 min (full space too slow); switching to filtered decode->prefill chain
+2026-09-03T18:42:44Z START decode
+2026-09-03T20:12:55Z END decode rc=0
+/home/<USER>/tp4/moe-configs/decode/E=288,N=512,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json
+2026-09-03T20:12:55Z START prefill
+2026-09-03T20:54:51Z KILLED prefill (1152-config space ~1 config/min at batch 1024); restarting prefill with a 64-config space
+2026-09-03T20:54:51Z START prefill
+2026-09-03T21:05:29Z END prefill rc=0
+/home/<USER>/tp4/moe-configs/prefill/E=288,N=512,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json
+2026-09-03T21:05:29Z DONE_ALL

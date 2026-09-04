@@ -1,0 +1,763 @@
+{
+  "kind": "ab-pass",
+  "label": "prod-2026-09-04-adaptive-k",
+  "ts": 1788521073.437372,
+  "decode_structured": {
+    "kind": "decode",
+    "label": "decode-structured",
+    "ts": 1788520770.6928341,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "structured",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 200,
+    "runs": 3,
+    "concurrency": 1,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 71.44116638284483,
+            "ttft_s": 0.2595779169932939,
+            "decode_s": 2.785508833010681,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 2.785508833010681,
+        "aggregate_tok_s": 71.44116638284483,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 71.85116446525323,
+            "ttft_s": 0.33336387501913123,
+            "decode_s": 2.769614124990767,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 2.769614124990767,
+        "aggregate_tok_s": 71.85116446525323,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 71.432170599747,
+            "ttft_s": 0.33069712499855086,
+            "decode_s": 2.7858596250007395,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 2.7858596250007395,
+        "aggregate_tok_s": 71.432170599747,
+        "length_finish": [
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 63.577288963426255,
+      "ttft_s": 0.7206948749953881,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 71.44116638284483,
+    "tok_s_min": 71.432170599747,
+    "tok_s_max": 71.85116446525323,
+    "aggregate_tok_s_median": 71.44116638284483,
+    "ttft_median_s": 0.33069712499855086,
+    "completion_tokens_median": 200.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true,
+    "spec_decode": {
+      "available": true,
+      "draft_tokens_delta": 525.0,
+      "accepted_tokens_delta": 495.0,
+      "acceptance_rate": 0.9428571428571428,
+      "drafts_delta": 105.0,
+      "steps_basis": "num_drafts counter",
+      "mean_accepted_per_step": 4.714285714285714,
+      "per_pos_accepted_delta": {
+        "0": 105.0,
+        "1": 102.0,
+        "2": 99.0,
+        "3": 99.0,
+        "4": 90.0
+      },
+      "per_pos_acceptance": {
+        "0": 1.0,
+        "1": 0.9714285714285714,
+        "2": 0.9428571428571428,
+        "3": 0.9428571428571428,
+        "4": 0.8571428571428571
+      },
+      "num_requests_running_before": 0.0
+    }
+  },
+  "decode_prose": {
+    "kind": "decode",
+    "label": "decode-prose",
+    "ts": 1788520781.304053,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "prose",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 200,
+    "runs": 3,
+    "concurrency": 1,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 39.738608158041195,
+            "ttft_s": 0.3137695000041276,
+            "decode_s": 5.007724458002485,
+            "completion_tokens": 200,
+            "prompt_tokens": 39,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 5.007724458002485,
+        "aggregate_tok_s": 39.738608158041195,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 40.25312370566445,
+            "ttft_s": 0.3574253750266507,
+            "decode_s": 4.943715708999662,
+            "completion_tokens": 200,
+            "prompt_tokens": 39,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 4.943715708999662,
+        "aggregate_tok_s": 40.25312370566445,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 42.93789492011166,
+            "ttft_s": 0.30874029200640507,
+            "decode_s": 4.634600749996025,
+            "completion_tokens": 200,
+            "prompt_tokens": 39,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 4.634600749996025,
+        "aggregate_tok_s": 42.93789492011166,
+        "length_finish": [
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 54.36637241559719,
+      "ttft_s": 0.30731966701569036,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 40.25312370566445,
+    "tok_s_min": 39.738608158041195,
+    "tok_s_max": 42.93789492011166,
+    "aggregate_tok_s_median": 40.25312370566445,
+    "ttft_median_s": 0.3137695000041276,
+    "completion_tokens_median": 200.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true,
+    "spec_decode": {
+      "available": true,
+      "draft_tokens_delta": 788.0,
+      "accepted_tokens_delta": 391.0,
+      "acceptance_rate": 0.49619289340101524,
+      "drafts_delta": 212.0,
+      "steps_basis": "num_drafts counter",
+      "mean_accepted_per_step": 1.8443396226415094,
+      "per_pos_accepted_delta": {
+        "0": 155.0,
+        "1": 115.0,
+        "2": 87.0,
+        "3": 19.0,
+        "4": 15.0
+      },
+      "per_pos_acceptance": {
+        "0": 0.7311320754716981,
+        "1": 0.5424528301886793,
+        "2": 0.41037735849056606,
+        "3": 0.08962264150943396,
+        "4": 0.07075471698113207
+      },
+      "num_requests_running_before": 0.0
+    }
+  },
+  "decode_structured_c4": {
+    "kind": "decode",
+    "label": "decode-structured-c4",
+    "ts": 1788520797.892533,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "structured",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 200,
+    "runs": 3,
+    "concurrency": 4,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 49.64588482245435,
+            "ttft_s": 0.7917714579962194,
+            "decode_s": 4.008388624992222,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 1,
+            "tok_s": 50.83771312309272,
+            "ttft_s": 0.7915851669968106,
+            "decode_s": 3.9144168329949025,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 2,
+            "tok_s": 47.03687160638674,
+            "ttft_s": 0.26458124999771826,
+            "decode_s": 4.230723540997133,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 3,
+            "tok_s": 50.83795014237208,
+            "ttft_s": 0.791182166984072,
+            "decode_s": 3.914398583001457,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 4,
+        "tokens_total": 796,
+        "aggregate_window_s": 4.535270958003821,
+        "aggregate_tok_s": 175.5132179247689,
+        "length_finish": [
+          "length",
+          "length",
+          "length",
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 60.017462361400696,
+            "ttft_s": 0.3808213330048602,
+            "decode_s": 3.3157016669865698,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 1,
+            "tok_s": 60.01496376888524,
+            "ttft_s": 0.38062745798379183,
+            "decode_s": 3.315839709015563,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 2,
+            "tok_s": 60.01500375083407,
+            "ttft_s": 0.3805380830017384,
+            "decode_s": 3.3158375000057276,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 3,
+            "tok_s": 60.01667648114896,
+            "ttft_s": 0.3802738330268767,
+            "decode_s": 3.3157450839935336,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 4,
+        "tokens_total": 796,
+        "aggregate_window_s": 3.315968499984592,
+        "aggregate_tok_s": 240.05053124108346,
+        "length_finish": [
+          "length",
+          "length",
+          "length",
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 59.88371875186925,
+            "ttft_s": 0.39023575000464916,
+            "decode_s": 3.323106916999677,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 1,
+            "tok_s": 59.88616288657416,
+            "ttft_s": 0.3900549999962095,
+            "decode_s": 3.3229712909960654,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 2,
+            "tok_s": 59.88017645666628,
+            "ttft_s": 0.3898208749887999,
+            "decode_s": 3.3233035000157543,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 3,
+            "tok_s": 59.888836244194295,
+            "ttft_s": 0.3897418749984354,
+            "decode_s": 3.3228229579981416,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 4,
+        "tokens_total": 796,
+        "aggregate_window_s": 3.3233035000157543,
+        "aggregate_tok_s": 239.5207058266651,
+        "length_finish": [
+          "length",
+          "length",
+          "length",
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 63.20368252944998,
+      "ttft_s": 0.25964883298729546,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 59.88494081922171,
+    "tok_s_min": 47.03687160638674,
+    "tok_s_max": 60.017462361400696,
+    "aggregate_tok_s_median": 239.5207058266651,
+    "ttft_median_s": 0.38978137499361765,
+    "completion_tokens_median": 200.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true,
+    "spec_decode": {
+      "available": true,
+      "draft_tokens_delta": 2105.0,
+      "accepted_tokens_delta": 1987.0,
+      "acceptance_rate": 0.9439429928741092,
+      "drafts_delta": 421.0,
+      "steps_basis": "num_drafts counter",
+      "mean_accepted_per_step": 4.719714964370547,
+      "per_pos_accepted_delta": {
+        "0": 421.0,
+        "1": 408.0,
+        "2": 399.0,
+        "3": 397.0,
+        "4": 362.0
+      },
+      "per_pos_acceptance": {
+        "0": 1.0,
+        "1": 0.9691211401425178,
+        "2": 0.9477434679334917,
+        "3": 0.9429928741092637,
+        "4": 0.8598574821852731
+      },
+      "num_requests_running_before": 0.0
+    }
+  },
+  "decode_structured_1400": {
+    "kind": "decode",
+    "label": "decode-structured-1400",
+    "ts": 1788520810.985654,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "count3000",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 1400,
+    "runs": 3,
+    "concurrency": 1,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 63.039504098796435,
+            "ttft_s": 0.30107800001860596,
+            "decode_s": 22.19243345898576,
+            "completion_tokens": 1400,
+            "prompt_tokens": 34,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 1399,
+        "aggregate_window_s": 22.19243345898576,
+        "aggregate_tok_s": 63.039504098796435,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 62.2637501804083,
+            "ttft_s": 0.34728454099968076,
+            "decode_s": 22.46893249999266,
+            "completion_tokens": 1400,
+            "prompt_tokens": 34,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 1399,
+        "aggregate_window_s": 22.46893249999266,
+        "aggregate_tok_s": 62.2637501804083,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 65.03246728981658,
+            "ttft_s": 0.3400206250080373,
+            "decode_s": 21.512331583013292,
+            "completion_tokens": 1400,
+            "prompt_tokens": 34,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 1399,
+        "aggregate_window_s": 21.512331583013292,
+        "aggregate_tok_s": 65.03246728981658,
+        "length_finish": [
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 75.28960706225364,
+      "ttft_s": 0.26074691701796837,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 63.039504098796435,
+    "tok_s_min": 62.2637501804083,
+    "tok_s_max": 65.03246728981658,
+    "aggregate_tok_s_median": 63.039504098796435,
+    "ttft_median_s": 0.3400206250080373,
+    "completion_tokens_median": 1400.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true,
+    "spec_decode": {
+      "available": true,
+      "draft_tokens_delta": 3898.0,
+      "accepted_tokens_delta": 3400.0,
+      "acceptance_rate": 0.8722421754746024,
+      "drafts_delta": 808.0,
+      "steps_basis": "num_drafts counter",
+      "mean_accepted_per_step": 4.207920792079208,
+      "per_pos_accepted_delta": {
+        "0": 768.0,
+        "1": 727.0,
+        "2": 699.0,
+        "3": 616.0,
+        "4": 590.0
+      },
+      "per_pos_acceptance": {
+        "0": 0.9504950495049505,
+        "1": 0.8997524752475248,
+        "2": 0.8650990099009901,
+        "3": 0.7623762376237624,
+        "4": 0.7301980198019802
+      },
+      "num_requests_running_before": 0.0
+    }
+  },
+  "prefill_30k": {
+    "kind": "prefill",
+    "label": "prefill-30k",
+    "ts": 1788520878.973948,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "temperature": 0,
+    "thinking": "off",
+    "target_tokens": 30000,
+    "repeats": 2313,
+    "max_tokens": 128,
+    "runs": 3,
+    "seed": null,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "repeats": 3318,
+        "salt": "d6888964ec1c52d4",
+        "needle_position": 0.5165,
+        "http": 200,
+        "ttft_s": 13.694383833993925,
+        "prefill_tok_s": 2187.5390936273425,
+        "prompt_tokens": 29957,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user is asking about an access code that was embedded in a large block of repetitive text. The text contains \"The access code for the Ravenna warehouse is ZULU-7741.\" embedded in the middle of the repetitive filler text.\n\nThis appears to be a test of whether I can find information embedded in a large amount of noise/distractor text. The information is right there in the text provided by the us",
+        "wall_s": 16.450126125011593,
+        "replaced_misized_run0": true
+      },
+      {
+        "run": 1,
+        "repeats": 3318,
+        "salt": "7662591c803d30f8",
+        "needle_position": 0.4924,
+        "http": 200,
+        "ttft_s": 13.673569417005638,
+        "prefill_tok_s": 2191.088448546518,
+        "prompt_tokens": 29960,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user is asking about an access code for the Ravenna warehouse. Looking at the text, there's a line embedded in the middle: \"The access code for the Ravenna warehouse is ZULU-7741.\"\n\nThis appears to be a test of whether I can find information embedded in a large amount of repetitive text. The question is whether this is a legitimate request or some kind of injection/prompt injection test.\n\nLet ",
+        "wall_s": 16.367690209008288
+      },
+      {
+        "run": 2,
+        "repeats": 3318,
+        "salt": "44d676da126f08f4",
+        "needle_position": 0.6017,
+        "http": 200,
+        "ttft_s": 13.699950792011805,
+        "prefill_tok_s": 2186.431210940235,
+        "prompt_tokens": 29954,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has embedded a question within a large amount of repetitive text. The text says \"The access code for the Ravenna warehouse is ZULU-7741.\" embedded in the middle of the repetitive filler text.\n\nThis appears to be a test of whether I can find information embedded in noise. The question asks what the access code for the Ravenna warehouse is. The answer is clearly stated in the text: ZULU-774",
+        "wall_s": 17.075996375002433
+      }
+    ],
+    "sizing_correction": {
+      "repeats_initial": 2313,
+      "triggered": true,
+      "rerun_run0": true,
+      "tolerance": 0.1,
+      "run0_prompt_tokens": 20911,
+      "run0_repeats": 2313,
+      "tokens_per_repeat_observed": 9.041,
+      "repeats_rescaled": 3318,
+      "discarded_run0": {
+        "run": 0,
+        "repeats": 2313,
+        "salt": "dbe85e74a33d5d1d",
+        "needle_position": 0.6328,
+        "http": 200,
+        "ttft_s": 10.336932459002128,
+        "prefill_tok_s": 2022.9405660660218,
+        "prompt_tokens": 20911,
+        "completion_tokens": 95,
+        "finish_reason": "stop",
+        "needle_ok": true,
+        "answer_text": "We need answer question. Need inspect prompt. It contains repeated filler and embedded sentence: \"The access code for the Ravenna warehouse is ZULU-7741.\" User asks access code. We can answer directly. Need be careful? This is not sensitive? It's a fictional access code. We can provide. Need maybe mention from document. Final concise.The access code for the Ravenna warehouse is **ZULU-7741**.",
+        "wall_s": 12.694514041999355
+      }
+    },
+    "prefill_tok_s_median": 2187.5390936273425,
+    "prefill_tok_s_min": 2186.431210940235,
+    "prefill_tok_s_max": 2191.088448546518,
+    "ttft_median_s": 13.694383833993925,
+    "prompt_tokens_median": 29957.0,
+    "needle_ok_runs": 3,
+    "needle_ok_all": true
+  },
+  "prefill_100k": {
+    "kind": "prefill",
+    "label": "prefill-100k",
+    "ts": 1788520941.673289,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "temperature": 0,
+    "thinking": "off",
+    "target_tokens": 100000,
+    "repeats": 7710,
+    "max_tokens": 128,
+    "runs": 2,
+    "seed": null,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "repeats": 11096,
+        "salt": "df5a4e0ff6e455bc",
+        "needle_position": 0.435,
+        "http": 200,
+        "ttft_s": 45.25550033300533,
+        "prefill_tok_s": 2208.725994950503,
+        "prompt_tokens": 99957,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has embedded a question within a large amount of repetitive filler text. The text says \"The access code for the Ravenna warehouse is ZULU-7741.\" embedded in the middle of the repeated text.\n\nThis appears to be a test of whether I can find information embedded in noise. The question asks for the access code for the Ravenna warehouse, which is stated in the text: ZULU-7741.\n\nIs there any ha",
+        "wall_s": 48.253822750004474,
+        "replaced_misized_run0": true
+      },
+      {
+        "run": 1,
+        "repeats": 11096,
+        "salt": "cd765790878e07a2",
+        "needle_position": 0.6115,
+        "http": 200,
+        "ttft_s": 45.265823708992684,
+        "prefill_tok_s": 2208.200178629299,
+        "prompt_tokens": 99956,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has sent a large amount of repetitive text with a \"run nonce\" and embedded within it is a statement: \"The access code for the Ravenna warehouse is ZULU-7741.\"\n\nThen at the end, they ask: \"what is the access code for the Ravenna warehouse?\"\n\nThis appears to be a test of whether I can find information embedded in a large amount of noise/distractor text. The information is plainly stated in ",
+        "wall_s": 48.64775966698653
+      }
+    ],
+    "sizing_correction": {
+      "repeats_initial": 7710,
+      "triggered": true,
+      "rerun_run0": true,
+      "tolerance": 0.1,
+      "run0_prompt_tokens": 69483,
+      "run0_repeats": 7710,
+      "tokens_per_repeat_observed": 9.012,
+      "repeats_rescaled": 11096,
+      "discarded_run0": {
+        "run": 0,
+        "repeats": 7710,
+        "salt": "4959787d4c33b957",
+        "needle_position": 0.5036,
+        "http": 200,
+        "ttft_s": 31.41374249997898,
+        "prefill_tok_s": 2211.866351169285,
+        "prompt_tokens": 69483,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has pasted a large amount of repetitive text with an embedded statement: \"The access code for the Ravenna warehouse is ZULU-7741.\" Then asks: \"what is the access code for the Ravenna warehouse?\"\n\nThis appears to be a test of whether I can find information embedded in a needle-in-haystack scenario. The information is right there in the provided text. There's nothing harmful about repeating",
+        "wall_s": 34.815397124999436
+      }
+    },
+    "prefill_tok_s_median": 2208.463086789901,
+    "prefill_tok_s_min": 2208.200178629299,
+    "prefill_tok_s_max": 2208.725994950503,
+    "ttft_median_s": 45.26066202099901,
+    "prompt_tokens_median": 99956.5,
+    "needle_ok_runs": 2,
+    "needle_ok_all": true
+  }
+}

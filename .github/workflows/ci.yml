@@ -1,0 +1,99 @@
+name: ci
+
+# Workstation-only checks: nothing here talks to the cluster, needs a GPU, or reads
+# cluster.env (which is never committed). Everything below is runnable locally with the
+# same commands — see THIRD_PARTY_NOTICES.md / README for the repository layout.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --version
+
+      - name: Shell syntax (bash -n)
+        run: |
+          set -euo pipefail
+          files=$(git ls-files '*.sh')
+          for f in $files tp4ctl; do
+            bash -n "$f"
+          done
+          # cluster.env.example is sourced, not executed: it must still parse.
+          bash -n cluster.env.example
+          echo "[bash -n] ok: $(printf '%s\n' $files | wc -l) shell files + tp4ctl + cluster.env.example"
+
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          # shellcheck -S warning: style nits do not fail the build, real bugs do.
+          shellcheck -S warning $(git ls-files '*.sh') tp4ctl
+          echo "[shellcheck] ok"
+
+      - name: Python syntax (py_compile)
+        run: |
+          set -euo pipefail
+          python3 -m py_compile $(git ls-files '*.py')
+          echo "[py_compile] ok: $(git ls-files '*.py' | wc -l) files"
+
+      - name: Adaptive-k policy tests
+        run: python3 node/patches/test_adaptive_k_policy.py
+
+      - name: Markdown relative links
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, subprocess, sys, urllib.parse
+
+          files = subprocess.run(["git", "ls-files", "*.md"],
+                                 capture_output=True, text=True, check=True).stdout.split()
+          pat = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+          bad = []
+          for f in files:
+              p = pathlib.Path(f)
+              for m in pat.finditer(p.read_text(encoding="utf-8", errors="replace")):
+                  target = m.group(1)
+                  if target.startswith(("http://", "https://", "mailto:", "#", "<")):
+                      continue
+                  target = target.split("#", 1)[0]
+                  if not target:
+                      continue
+                  if not (p.parent / urllib.parse.unquote(target)).exists():
+                      bad.append(f"{f} -> {target}")
+          for b in bad:
+              print("BROKEN LINK:", b)
+          print(f"[link-check] {len(files)} markdown files, {len(bad)} broken relative links")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Performance tables are in sync
+        run: |
+          set -euo pipefail
+          python3 scripts/bench/perf-table.py --check README.md --marker perf-table --compact \
+            --rows dflash2-k3,moe-triton,iommu-passthrough,moe-hybrid,adaptive-k-v1,prod-2026-09-04-adaptive-k
+          python3 scripts/bench/perf-table.py --check bench-results/README.md --marker perf-table-full
+
+      - name: Sanitiser sweep (no site data in the tree)
+        run: |
+          set -euo pipefail
+          # Static mode: the IPv4 / e-mail / MAC / key / token rules WITHOUT cluster.env,
+          # scoped by scripts/mirror-allow.txt. Placeholders such as <ALIAS_RANK1> are the
+          # intended content and are not flagged.
+          scripts/mirror-snapshot.sh --scan-static .

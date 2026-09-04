@@ -1,0 +1,119 @@
+{
+  "kind": "longctx",
+  "label": "prod-2026-09-04-adaptive-k-longctx250k",
+  "ts": 1788521895.536586,
+  "url": "http://<MGMT_IP_RANK0>:8000/v1",
+  "model": "glm-5.3-flash",
+  "temperature": 0,
+  "thinking": "off",
+  "args": {
+    "context_tokens": [
+      250000
+    ],
+    "runs": 1,
+    "max_tokens": 200,
+    "followup": true,
+    "max_model_len": 262144,
+    "cap": 259944,
+    "seed": null
+  },
+  "health_code": 200,
+  "sizes": [
+    {
+      "context_tokens_requested": 250000,
+      "context_tokens_target": 250000,
+      "repeats_initial": 19275,
+      "runs_detail": [
+        {
+          "run": 0,
+          "warmup": false,
+          "repeats": 27760,
+          "salt": "a42d9215ca09e38a",
+          "needle_position": 0.4883,
+          "http": 200,
+          "ttft_s": 116.68773037500796,
+          "prefill_tok_s": 2142.0246944278006,
+          "decode_s": 5.185291250003502,
+          "decode_tok_s": 38.3777863972184,
+          "wall_s": 121.87302162501146,
+          "prompt_tokens": 249948,
+          "completion_tokens": 200,
+          "finish_reason": "length",
+          "needle_ok": true,
+          "answer_head": "We need answer to user. Need parse. They provided huge repeated filler and needle: \"[run nonce: a42d9215ca09e38a] The access code for the Ravenna warehouse is ZULU-7741. t contains routine operational data.\" Then final instruction: \"Run nonce: ... First state the exact code from the needle line. The",
+          "followup": {
+            "cached_prefix": true,
+            "error": null,
+            "followup_ttft_s": 2.7348057919880375,
+            "followup_prompt_tokens": 250177,
+            "followup_prefill_tok_s_cached": 91478.89065209875,
+            "followup_decode_tok_s": 37.83589817019402,
+            "followup_completion_tokens": 200,
+            "followup_finish_reason": "length",
+            "followup_needle_ok": true,
+            "followup_answer_head": "We need answer. Need parse. User asks repeat code from needle line then continue essay. The code is ZULU-7741. Is this sensitive? It's an access code for warehouse. Policy? We have no explicit policy "
+          }
+        }
+      ],
+      "warmup": {
+        "repeats": 19275,
+        "prompt_tokens": 173588,
+        "ttft_s": 79.4175759589998,
+        "prefill_tok_s": 2185.7630115733664,
+        "decode_tok_s": 41.29678368800673,
+        "needle_ok": true,
+        "finish_reason": "length",
+        "error": null
+      },
+      "repeats_measured": 27760,
+      "spec_decode": {
+        "available": true,
+        "draft_tokens_delta": 550.0,
+        "accepted_tokens_delta": 243.0,
+        "acceptance_rate": 0.44181818181818183,
+        "drafts_delta": 156.0,
+        "steps_basis": "num_drafts counter",
+        "mean_accepted_per_step": 1.5576923076923077,
+        "per_pos_accepted_delta": {
+          "0": 118.0,
+          "1": 68.0,
+          "2": 44.0,
+          "3": 7.0,
+          "4": 6.0
+        },
+        "per_pos_acceptance": {
+          "0": 0.7564102564102564,
+          "1": 0.4358974358974359,
+          "2": 0.28205128205128205,
+          "3": 0.04487179487179487,
+          "4": 0.038461538461538464
+        },
+        "num_requests_running_before": 0.0
+      },
+      "prompt_tokens_median": 249948,
+      "ttft_median_s": 116.68773037500796,
+      "prefill_tok_s_median": 2142.0246944278006,
+      "prefill_tok_s_minmax": [
+        2142.0246944278006,
+        2142.0246944278006
+      ],
+      "decode_tok_s_median": 38.3777863972184,
+      "decode_tok_s_minmax": [
+        38.3777863972184,
+        38.3777863972184
+      ],
+      "completion_tokens_median": 200,
+      "needle_ok_runs": 1,
+      "runs_ok": 1,
+      "runs_error": 0,
+      "finish_reasons": [
+        "length"
+      ],
+      "followup_ttft_median_s": 2.7348057919880375,
+      "followup_prompt_tokens_median": 250177.0,
+      "followup_decode_tok_s_median": 37.83589817019402,
+      "followup_needle_ok_runs": 1,
+      "followup_runs_ok": 1
+    }
+  ]
+}

@@ -1,0 +1,276 @@
+{
+  "kind": "longctx",
+  "label": "adaptive-k-v5-longctx",
+  "ts": 1788515079.95908,
+  "url": "http://<MGMT_IP_RANK0>:8000/v1",
+  "model": "glm-5.3-flash",
+  "temperature": 0,
+  "thinking": "off",
+  "args": {
+    "context_tokens": [
+      100000,
+      200000
+    ],
+    "runs": 2,
+    "max_tokens": 200,
+    "followup": true,
+    "max_model_len": 262144,
+    "cap": 259944,
+    "seed": null
+  },
+  "health_code": 200,
+  "sizes": [
+    {
+      "context_tokens_requested": 100000,
+      "context_tokens_target": 100000,
+      "repeats_initial": 7710,
+      "runs_detail": [
+        {
+          "run": 0,
+          "warmup": false,
+          "repeats": 11094,
+          "salt": "a3b8c9ea937450bd",
+          "needle_position": 0.553,
+          "http": 200,
+          "ttft_s": 46.21062495801016,
+          "prefill_tok_s": 2163.0090502092194,
+          "decode_s": 5.54425187499146,
+          "decode_tok_s": 35.89303020261981,
+          "wall_s": 51.75487683300162,
+          "prompt_tokens": 99954,
+          "completion_tokens": 200,
+          "finish_reason": "length",
+          "needle_ok": true,
+          "answer_head": "We need answer to user. Need parse. User has huge repeated filler, with needle line: \"[run nonce: a3b8c9ea937450bd] The access code for the Ravenna warehouse is ZULU-7741. report contains...\" Then instruction: \"Run nonce: ... First state the exact code from the needle line. Then, without stopping, w",
+          "followup": {
+            "cached_prefix": true,
+            "error": null,
+            "followup_ttft_s": 2.1968880420026835,
+            "followup_prompt_tokens": 100183,
+            "followup_prefill_tok_s_cached": 45602.23283325497,
+            "followup_decode_tok_s": 36.077796599304705,
+            "followup_completion_tokens": 200,
+            "followup_finish_reason": "length",
+            "followup_needle_ok": true,
+            "followup_answer_head": "We need answer. Need parse. User asks repeat code from needle line then continue essay. We have system? No explicit safety except maybe not in prompt. We can comply. Need one sentence repeat code, the"
+          }
+        },
+        {
+          "run": 1,
+          "warmup": false,
+          "repeats": 11094,
+          "salt": "4fd3b6faa5b2f8bd",
+          "needle_position": 0.5508,
+          "http": 200,
+          "ttft_s": 45.98391341697425,
+          "prefill_tok_s": 2173.8906624484866,
+          "decode_s": 4.533446792018367,
+          "decode_tok_s": 43.8959602107521,
+          "wall_s": 50.51736020899261,
+          "prompt_tokens": 99964,
+          "completion_tokens": 200,
+          "finish_reason": "length",
+          "needle_ok": true,
+          "answer_head": "Let me analyze this request carefully.\n\nThe user has sent a message with a \"run nonce\" and a massive amount of repeated text saying \"The quarterly logistics report contains routine operational data.\" Buried in the middle is a line: \"The access code for the Ravenna warehouse is ZULU-7741.\"\n\nThen at t",
+          "followup": {
+            "cached_prefix": true,
+            "error": null,
+            "followup_ttft_s": 2.1353274160064757,
+            "followup_prompt_tokens": 100193,
+            "followup_prefill_tok_s_cached": 46921.60988940169,
+            "followup_decode_tok_s": 39.67612221921868,
+            "followup_completion_tokens": 200,
+            "followup_finish_reason": "length",
+            "followup_needle_ok": true,
+            "followup_answer_head": "The user is asking me to repeat the code from the needle line and continue an essay about distributed inference over RoCE fabrics.\n\nLet me think about this. The previous turn (which appears in the con"
+          }
+        }
+      ],
+      "warmup": {
+        "repeats": 7710,
+        "prompt_tokens": 69499,
+        "ttft_s": 32.129597125021974,
+        "prefill_tok_s": 2163.0834563398676,
+        "decode_tok_s": 46.79140527365199,
+        "needle_ok": true,
+        "finish_reason": "length",
+        "error": null
+      },
+      "repeats_measured": 11094,
+      "spec_decode": {
+        "available": true,
+        "draft_tokens_delta": 1031.0,
+        "accepted_tokens_delta": 517.0,
+        "acceptance_rate": 0.501454898157129,
+        "drafts_delta": 283.0,
+        "steps_basis": "num_drafts counter",
+        "mean_accepted_per_step": 1.8268551236749118,
+        "per_pos_accepted_delta": {
+          "0": 218.0,
+          "1": 149.0,
+          "2": 97.0,
+          "3": 29.0,
+          "4": 24.0
+        },
+        "per_pos_acceptance": {
+          "0": 0.7703180212014135,
+          "1": 0.5265017667844523,
+          "2": 0.34275618374558303,
+          "3": 0.10247349823321555,
+          "4": 0.08480565371024736
+        },
+        "num_requests_running_before": 0.0
+      },
+      "prompt_tokens_median": 99959.0,
+      "ttft_median_s": 46.0972691874922,
+      "prefill_tok_s_median": 2168.449856328853,
+      "prefill_tok_s_minmax": [
+        2163.0090502092194,
+        2173.8906624484866
+      ],
+      "decode_tok_s_median": 39.89449520668596,
+      "decode_tok_s_minmax": [
+        35.89303020261981,
+        43.8959602107521
+      ],
+      "completion_tokens_median": 200.0,
+      "needle_ok_runs": 2,
+      "runs_ok": 2,
+      "runs_error": 0,
+      "finish_reasons": [
+        "length"
+      ],
+      "followup_ttft_median_s": 2.1661077290045796,
+      "followup_prompt_tokens_median": 100188.0,
+      "followup_decode_tok_s_median": 37.876959409261694,
+      "followup_needle_ok_runs": 2,
+      "followup_runs_ok": 2
+    },
+    {
+      "context_tokens_requested": 200000,
+      "context_tokens_target": 200000,
+      "repeats_initial": 22187,
+      "runs_detail": [
+        {
+          "run": 0,
+          "warmup": false,
+          "repeats": 22209,
+          "salt": "8df45195220f0dc9",
+          "needle_position": 0.4222,
+          "http": 200,
+          "ttft_s": 95.19416554202326,
+          "prefill_tok_s": 2100.8745531963764,
+          "decode_s": 5.792758999974467,
+          "decode_tok_s": 34.353233062324385,
+          "wall_s": 100.98692454199772,
+          "prompt_tokens": 199991,
+          "completion_tokens": 200,
+          "finish_reason": "length",
+          "needle_ok": true,
+          "answer_head": "We need answer to user. Need parse. They provided huge repeated filler with needle: \"[run nonce: 8df45195220f0dc9] The access code for the Ravenna warehouse is ZULU-7741.\" Then asks \"Run nonce: ... First state the exact code from the needle line. Then, without stopping, write a long, detailed techni",
+          "followup": {
+            "cached_prefix": true,
+            "error": null,
+            "followup_ttft_s": 3.0418711669917684,
+            "followup_prompt_tokens": 200220,
+            "followup_prefill_tok_s_cached": 65821.32806038784,
+            "followup_decode_tok_s": 33.83883014589997,
+            "followup_completion_tokens": 200,
+            "followup_finish_reason": "length",
+            "followup_needle_ok": true,
+            "followup_answer_head": "We need answer. Need identify request. User asks repeat code from needle line then continue essay. This is a secret? The needle line says access code for Ravenna warehouse is ZULU-7741. They ask repea"
+          }
+        },
+        {
+          "run": 1,
+          "warmup": false,
+          "repeats": 22209,
+          "salt": "8eadbbf6ab66bdbf",
+          "needle_position": 0.4867,
+          "http": 200,
+          "ttft_s": 93.31069058299181,
+          "prefill_tok_s": 2143.2378085566606,
+          "decode_s": 5.62010441700113,
+          "decode_tok_s": 35.40859479372196,
+          "wall_s": 98.93079499999294,
+          "prompt_tokens": 199987,
+          "completion_tokens": 200,
+          "finish_reason": "length",
+          "needle_ok": true,
+          "answer_head": "We need answer user. Need parse. They provided huge repeated filler and needle: \"[run nonce: 8eadbbf6ab66bdbf] The access code for the Ravenna warehouse is ZULU-7741.\" Then request: \"Run nonce: ... First state the exact code from the needle line. Then, without stopping, write a long, detailed techni",
+          "followup": {
+            "cached_prefix": true,
+            "error": null,
+            "followup_ttft_s": 3.3256228750105947,
+            "followup_prompt_tokens": 200216,
+            "followup_prefill_tok_s_cached": 60204.06026926976,
+            "followup_decode_tok_s": 32.0649383229998,
+            "followup_completion_tokens": 200,
+            "followup_finish_reason": "length",
+            "followup_needle_ok": true,
+            "followup_answer_head": "We need answer. Need identify needle line: \"[run nonce: 8eadbbf6ab66bdbf] The access code for the Ravenna warehouse is ZULU-7741.\" User asks repeat code from needle line, then continue essay. This is "
+          }
+        }
+      ],
+      "warmup": {
+        "repeats": 22187,
+        "prompt_tokens": 199798,
+        "ttft_s": 92.94028112501837,
+        "prefill_tok_s": 2149.7460259587792,
+        "decode_tok_s": 38.867745776097046,
+        "needle_ok": true,
+        "finish_reason": "length",
+        "error": null
+      },
+      "repeats_measured": 22209,
+      "spec_decode": {
+        "available": true,
+        "draft_tokens_delta": 1134.0,
+        "accepted_tokens_delta": 469.0,
+        "acceptance_rate": 0.41358024691358025,
+        "drafts_delta": 332.0,
+        "steps_basis": "num_drafts counter",
+        "mean_accepted_per_step": 1.4126506024096386,
+        "per_pos_accepted_delta": {
+          "0": 217.0,
+          "1": 145.0,
+          "2": 86.0,
+          "3": 11.0,
+          "4": 10.0
+        },
+        "per_pos_acceptance": {
+          "0": 0.6536144578313253,
+          "1": 0.4367469879518072,
+          "2": 0.25903614457831325,
+          "3": 0.03313253012048193,
+          "4": 0.030120481927710843
+        },
+        "num_requests_running_before": 0.0
+      },
+      "prompt_tokens_median": 199989.0,
+      "ttft_median_s": 94.25242806250753,
+      "prefill_tok_s_median": 2122.0561808765187,
+      "prefill_tok_s_minmax": [
+        2100.8745531963764,
+        2143.2378085566606
+      ],
+      "decode_tok_s_median": 34.880913928023176,
+      "decode_tok_s_minmax": [
+        34.353233062324385,
+        35.40859479372196
+      ],
+      "completion_tokens_median": 200.0,
+      "needle_ok_runs": 2,
+      "runs_ok": 2,
+      "runs_error": 0,
+      "finish_reasons": [
+        "length"
+      ],
+      "followup_ttft_median_s": 3.1837470210011816,
+      "followup_prompt_tokens_median": 200218.0,
+      "followup_decode_tok_s_median": 32.951884234449885,
+      "followup_needle_ok_runs": 2,
+      "followup_runs_ok": 2
+    }
+  ]
+}

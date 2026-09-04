@@ -1,0 +1,1718 @@
+diff --git a/src/Makefile b/src/Makefile
+index 03dfd519..03478142 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -87,7 +87,7 @@ LIBOBJ     := $(LIBSRCFILES:%.cc=$(OBJDIR)/%.o)
+ BINOBJ     := $(BINSRCFILES:%.cc=$(OBJDIR)/%.o)
+ PARAMBINOBJ     := $(PARAMBINSRCFILES:%.cc=$(OBJDIR)/%.o)
+ DEPFILES   := $(LIBOBJ:%.o=%.d) $(BINOBJ:%.o=%.d) $(PARAMBINOBJ:%.o=%.d)
+-LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
++LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl -libverbs
+ INCPLUGIN  := include/plugin
+ 
+ DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
+@@ -161,7 +161,7 @@ $(BINDIR)/$(BINNAME): $(BINOBJ)
+ $(BINDIR)/$(PARAMBIN): $(PARAMBINOBJ) $(LIBDIR)/$(LIBTARGET)
+ 	@printf "Linking    %-35s > %s\n" $(PARAMBIN) $@
+ 	mkdir -p $(BINDIR)
+-	$(CXX) $(CXXFLAGS) $< -o $@ -L$(LIBDIR) -lnccl -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
++	$(CXX) $(CXXFLAGS) $< -o $@ -L$(LIBDIR) -lnccl -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl -libverbs
+ 
+ $(PKGDIR)/nccl.pc : nccl.pc.in
+ 	mkdir -p $(PKGDIR)
+diff --git a/src/transport/generic.cc b/src/transport/generic.cc
+index 548d57c9..68be4359 100644
+--- a/src/transport/generic.cc
++++ b/src/transport/generic.cc
+@@ -11,6 +11,11 @@
+ 
+ NCCL_PARAM(MultiSegmentRegister, "MULTI_SEGMENT_REGISTER", 1);
+ 
++// 2-hop diagonal relay (net_ib/relay.cc): when active, the switchless tree's uncabled diagonal
++// edges are served by the relay, so we must CONNECT the tree (not skip it). Declared here; the
++// symbol is linked in from net_ib (local symbol, resolved within libnccl).
++extern "C" int relay_active(void);
++
+ ncclResult_t ncclTransportRingConnect(struct ncclComm* comm) {
+   struct ringConnInfo {
+     bool useNetPXN;
+@@ -48,6 +53,7 @@ fail:
+ 
+ ncclResult_t ncclTransportTreeConnect(struct ncclComm* comm) {
+   ncclResult_t ret = ncclSuccess;
++  if (getenv("NCCL_SKIP_TREE_CONNECT") && !relay_active()) { INFO(NCCL_INIT, "SWITCHLESS: skipping ncclTransportTreeConnect"); return ncclSuccess; }
+   if (comm && comm->nRanks > 1) {
+     // Connect Trees
+     for (int c = 0; c < comm->nChannels; c++) {
+@@ -68,6 +74,7 @@ fail:
+ 
+ ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
+   ncclResult_t ret = ncclSuccess;
++  if (getenv("NCCL_SKIP_TREE_CONNECT") && !relay_active()) { INFO(NCCL_INIT, "SWITCHLESS: skipping ncclTransportPatConnect"); return ncclSuccess; }
+   if (comm && comm->nRanks > 1) {
+     for (int mask = 1; mask < comm->nRanks; mask <<= 1) {
+       int prevPeer = (comm->rank + mask) % comm->nRanks;
+diff --git a/src/transport/net_ib/CMakeLists.txt b/src/transport/net_ib/CMakeLists.txt
+index 1d0edfec..3bbecbfa 100644
+--- a/src/transport/net_ib/CMakeLists.txt
++++ b/src/transport/net_ib/CMakeLists.txt
+@@ -9,6 +9,7 @@ set(NET_IB_SOURCES
+     ${CMAKE_CURRENT_SOURCE_DIR}/p2p_resiliency_recovery.cc
+     ${CMAKE_CURRENT_SOURCE_DIR}/reg.cc
+     ${CMAKE_CURRENT_SOURCE_DIR}/gin.cc
++    ${CMAKE_CURRENT_SOURCE_DIR}/relay.cc
+ )
+ 
+ add_subdirectory(gdaki)
+diff --git a/src/transport/net_ib/common.h b/src/transport/net_ib/common.h
+index 8c3cc80c..2508d2bc 100644
+--- a/src/transport/net_ib/common.h
++++ b/src/transport/net_ib/common.h
+@@ -232,6 +232,12 @@ struct ncclIbRequest {
+     } iget;
+   };
+   void* rmaProxyCtx;
++  // 2-hop diagonal relay: a relay request has no CQ events; the relay pump sets relayDone (and
++  // relaySize for recv) out of band. relayRemaining counts sub-recvs of a grouped irecv.
++  int relayReq;
++  int relayDone;
++  int relaySize;
++  int relayRemaining;
+ };
+ 
+ struct ncclIbNetCommDevBase {
+@@ -340,6 +346,13 @@ struct ncclIbResiliency;
+ struct alignas(32) ncclIbNetCommBase {
+   ncclNetVDeviceProps_t vProps;
+   bool isSend;
++  // 2-hop diagonal relay (switchless ring): lives in base (offset 0 of both send/recv comms) so
++  // regMr/isend/irecv/test can read it uniformly via a base* cast. alignas(32) keeps the size a
++  // 32-byte multiple, so the ctsFifo/remCtsFifo alignment static_asserts still hold.
++  int relayFlag;
++  int relayDstRank;   // send side: destination rank
++  int relaySrcRank;   // recv side: source rank
++  uint32_t relayConnId;
+   struct ncclIbRequest reqs[NET_IB_MAX_REQUESTS];
+   struct ncclIbQp qps[NCCL_IB_MAX_QPS];
+   // Array of pointers to the "actual" QPs that are used for data transfers.
+diff --git a/src/transport/net_ib/connect.cc b/src/transport/net_ib/connect.cc
+index e2c8ecb3..41d0805f 100644
+--- a/src/transport/net_ib/connect.cc
++++ b/src/transport/net_ib/connect.cc
+@@ -8,6 +8,7 @@
+ #include "connect.h"
+ #include "common.h"
+ #include "p2p_resiliency.h"
++#include "relay.h"
+ 
+ NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", -1);
+ NCCL_PARAM(IbRoutableFlidIbGidIndex, "IB_ROUTABLE_FLID_GID_INDEX", 1);
+@@ -541,7 +542,7 @@ static ncclResult_t ncclIbFindDevBySubnet(union ibv_gid* remoteGids, int nRemote
+   if (!anyValid) return ncclSuccess;
+ 
+   // First: check if the default device already works. If ALL its RoCE PFs
+-  // match some remote GID's subnet, keep it — this preserves NIC Fusion
++  // match some remote GID's subnet, keep it; this preserves NIC Fusion
+   // bandwidth when both ports connect to the same destination.
+   if (defaultDev >= 0 && defaultDev < ncclNMergedIbDevs) {
+     struct ncclIbMergedDev* mDev = ncclIbMergedDevs + defaultDev;
+@@ -825,6 +826,19 @@ ncclResult_t ncclIbConnectImpl(void* ctx, int dev, void* opaqueHandle, void** se
+   NCCLCHECKGOTO(ncclIbStatsInit(&comm->base.stats), ret, fail);
+   NCCLCHECKGOTO(ncclSocketInit(&comm->base.sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1),
+                 ret, fail);
++  // 2-hop diagonal relay: if the peer (its RoCE GID's IPv4 is in the handle) is a non-adjacent ring
++  // node, this tree edge has no cable. Flag the comm so we skip the (would-hang) QP RTR/RTS below
++  // and route isend through the relay overlay. Adjacent peers are unaffected (normal native path).
++  if (relay_active()) {
++    uint32_t peerIpNet; memcpy(&peerIpNet, &handle->listenGids[0].raw[12], 4);
++    int peerRank = relay_rank_of_ip(peerIpNet);
++    if (peerRank >= 0 && relay_next_hop(relay_my_rank(), peerRank) >= 0) {
++      comm->base.relayFlag = 1;
++      comm->base.relayDstRank = peerRank;
++      comm->base.relayConnId = relay_new_conn_id();
++      INFO(NCCL_NET, "NET/IB: RELAY diagonal connect -> rank%d conn=%u (2-hop RoCE)", peerRank, comm->base.relayConnId);
++    }
++  }
+   stage->comm = comm;
+   stage->state = ncclIbCommStateConnect;
+   NCCLCHECKGOTO(ncclSocketConnect(&comm->base.sock), ret, fail);
+@@ -912,6 +926,12 @@ ib_recv_dev_list:
+ 
+   memset(&meta, 0, sizeof(meta));
+   meta.ndevs = comm->base.vProps.ndevs;
++  // Relay diagonal: carry the relay id + our rank to the acceptor so it binds its recv comm.
++  if (comm->base.relayFlag) {
++    meta.relayFlag = 1;
++    meta.relaySrcRank = relay_my_rank();
++    meta.relayConnId = comm->base.relayConnId;
++  }
+ 
+   // Create QPs on the sender side
+   NCCLCHECKGOTO(ncclIbSenderQpsCreate(comm, &meta), ret, fail);
+@@ -1061,16 +1081,21 @@ ib_connect:
+     }
+   }
+ 
+-  for (int i = 0; i < comm->base.vProps.ndevs; i++) {
+-    ncclIbSendCommDev* commDev = comm->devs + i;
+-    NCCLCHECKGOTO(wrap_ibv_reg_mr(&commDev->cmplsRecordsMr, comm->devs[i].base.pd, &comm->remCmplsRecords.elems,
+-                                  sizeof(comm->remCmplsRecords.elems),
+-                                  IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ),
+-                  ret, fail);
+-    comm->devs[i].sge.lkey = comm->devs[i].cmplsRecordsMr->lkey;
+-  }
++  // Relay diagonal: no QP carries data on this edge (it's uncabled); skip the completion-record
++  // MR registration and the QP RTR/RTS (the latter would hang trying to reach an unreachable GID).
++  // isend/irecv route through the relay overlay instead.
++  if (!comm->base.relayFlag) {
++    for (int i = 0; i < comm->base.vProps.ndevs; i++) {
++      ncclIbSendCommDev* commDev = comm->devs + i;
++      NCCLCHECKGOTO(wrap_ibv_reg_mr(&commDev->cmplsRecordsMr, comm->devs[i].base.pd, &comm->remCmplsRecords.elems,
++                                    sizeof(comm->remCmplsRecords.elems),
++                                    IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ),
++                    ret, fail);
++      comm->devs[i].sge.lkey = comm->devs[i].cmplsRecordsMr->lkey;
++    }
+ 
+-  NCCLCHECKGOTO(ncclIbSenderQpsToRts(comm, &remMeta), ret, fail);
++    NCCLCHECKGOTO(ncclIbSenderQpsToRts(comm, &remMeta), ret, fail);
++  }
+ 
+   comm->base.ready = 1;
+   stage->state = ncclIbCommStateConnected;
+@@ -1499,6 +1524,31 @@ ib_recv:
+   // of a receive request) per QP, in the worst case.
+   int cqSize;
+   cqSize = 2 * NET_IB_MAX_REQUESTS * nQpsPerDev;
++
++  // Relay diagonal: the connector flagged this uncabled tree edge for the 2-hop relay. Bind this
++  // recv comm to (relaySrcRank, relayConnId), register it with the relay overlay, and skip ALL the
++  // QP/MR setup below (ncclIbReceiverQpsCreateToRts would hang reaching an unreachable GID). Send
++  // back a minimal metadata (ndevs=0) so the connector's rendezvous completes; irecv pulls from
++  // the relay overlay.
++  if (remMeta.relayFlag) {
++    rComm->base.relayFlag = 1;
++    rComm->base.relaySrcRank = remMeta.relaySrcRank;
++    rComm->base.relayConnId = remMeta.relayConnId;
++    relay_register_rconn(remMeta.relaySrcRank, remMeta.relayConnId);
++    INFO(NCCL_NET, "NET/IB: RELAY diagonal accept <- rank%d conn=%u (2-hop RoCE)", remMeta.relaySrcRank,
++         remMeta.relayConnId);
++    memset(&meta, 0, sizeof(meta));
++    meta.relayFlag = 1;
++    meta.relayConnId = remMeta.relayConnId;
++    meta.ndevs = 0;
++    stage->state = ncclIbCommStateSend;
++    stage->offset = 0;
++    if (stage->buffer) { free(stage->buffer); stage->buffer = NULL; }
++    NCCLCHECKGOTO(ncclIbMalloc((void**)&stage->buffer, sizeof(struct ncclIbConnectionMetadata)), ret, fail);
++    memcpy(stage->buffer, &meta, sizeof(struct ncclIbConnectionMetadata));
++    goto ib_send;
++  }
++
+   for (int i = 0; i < rComm->base.vProps.ndevs; i++) {
+     rCommDev = rComm->devs + i;
+     ibDevN = rComm->base.vProps.devs[i];
+diff --git a/src/transport/net_ib/connect.h b/src/transport/net_ib/connect.h
+index cc119205..2fac96ba 100644
+--- a/src/transport/net_ib/connect.h
++++ b/src/transport/net_ib/connect.h
+@@ -64,6 +64,12 @@ struct ncclIbConnectionMetadata {
+   int ndevs;
+   int tc;
+   int sl;
++  // 2-hop diagonal relay (switchless ring): connect side sets relayFlag=1 + the conn id + its
++  // own rank; accept reads them to bind its recv comm to (relaySrcRank, relayConnId) without
++  // needing a QP. Appended at the end so the wire layout matches on both sides.
++  int relayFlag;
++  int relaySrcRank;
++  uint32_t relayConnId;
+ };
+ 
+ ncclResult_t ncclIbQpCreate(struct ncclIbQp* qp, struct ncclIbQpCreateAttr* createQpAttrs);
+diff --git a/src/transport/net_ib/init.cc b/src/transport/net_ib/init.cc
+index 0b95f6b1..95789ee0 100644
+--- a/src/transport/net_ib/init.cc
++++ b/src/transport/net_ib/init.cc
+@@ -7,6 +7,7 @@
+ 
+ #include "common.h"
+ #include "p2p_resiliency_recovery.h"
++#include "relay.h"
+ 
+ NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
+ NCCL_PARAM(IbAdaptiveRouting, "IB_ADAPTIVE_ROUTING", -2);
+@@ -524,6 +525,7 @@ ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config
+   ncclResult_t ret = ncclSuccess;
+   ncclNetCommConfig_t* netCommConfig = nullptr;
+   NCCLCHECK(ncclIbInitDevices(logFunction, profFunction));
++  relay_init();  // best-effort: stand up the 2-hop diagonal relay overlay (gated by NCCL_RELAY_ENABLE); idempotent
+   NCCLCHECK(ncclIbPortRecoveryThreadStart());
+   NCCLCHECK(ncclCalloc(&netCommConfig, 1));
+   netCommConfig->trafficClass = config->trafficClass;
+diff --git a/src/transport/net_ib/p2p.cc b/src/transport/net_ib/p2p.cc
+index fadf363b..f9bf4396 100644
+--- a/src/transport/net_ib/p2p.cc
++++ b/src/transport/net_ib/p2p.cc
+@@ -9,6 +9,7 @@
+ #include "common.h"
+ #include "compiler.h"
+ #include "p2p_resiliency.h"
++#include "relay.h"
+ 
+ NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", -2);
+ int64_t ncclIbArThreshold = 8192;
+@@ -269,6 +270,25 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
+   }
+   NCCLCHECK(ncclIbStatsCheckFatalCount(&comm->base.stats, __func__));
+ 
++  // 2-hop diagonal relay: this comm has no QP/CTS FIFO. Hand the payload to the relay overlay
++  // (which copies it into a registered bounce buffer and forwards toward relay_dst_rank), then
++  // complete the request immediately (store-and-forward; the caller's buffer is free).
++  if (comm->base.relayFlag) {
++    struct ncclIbRequest* req;
++    NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
++    req->type = NCCL_NET_IB_REQ_SEND;
++    req->sock = &comm->base.sock;
++    req->base = &comm->base;
++    req->nreqs = 1;
++    req->relayReq = 1;
++    req->relaySize = (int)size;
++    int rc = relay_send_msg(comm->base.relayDstRank, comm->base.relayConnId, data, (uint32_t)size);
++    if (rc != 0) INFO(NCCL_NET, "NET/IB: relay isend -> rank%d failed rc=%d", comm->base.relayDstRank, rc);
++    req->relayDone = 1;
++    *request = req;
++    return ncclSuccess;
++  }
++
+   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)mhandle;
+ 
+   // Wait for the receiver to have posted the corresponding receive
+@@ -440,6 +460,26 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
+ 
+   struct ncclIbRequest* req;
+   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
++
++  // 2-hop diagonal relay: no QP/CTS. Register n pending recvs with the relay overlay for
++  // (relay_src_rank, relay_conn_id); the relay pump copies delivered payloads into data[i] and
++  // sets relayDone when all n land. No CTS is posted (the relay has its own flow).
++  if (comm->base.relayFlag) {
++    req->type = NCCL_NET_IB_REQ_RECV;
++    req->sock = &comm->base.sock;
++    req->base = &comm->base;
++    req->nreqs = n;
++    req->relayReq = 1;
++    req->relayDone = 0;
++    req->relayRemaining = n;
++    for (int i = 0; i < n; i++) {
++      relay_post_recv_req(comm->base.relaySrcRank, comm->base.relayConnId, data[i], (uint32_t)sizes[i],
++                          &req->relayDone, &req->relaySize, &req->relayRemaining);
++    }
++    *request = req;
++    return ncclSuccess;
++  }
++
+   int slot = comm->base.fifoHead % NET_IB_MAX_REQUESTS;
+   req->id = comm->base.fifoHead;
+   req->type = NCCL_NET_IB_REQ_RECV;
+@@ -818,6 +858,17 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
+   struct ncclIbRequest* r = (struct ncclIbRequest*)request;
+   *done = 0;
+ 
++  // 2-hop diagonal relay: completion is driven out of band; isend sets relayDone immediately
++  // (store-and-forward), irecv's relayDone is set by the relay pump when all sub-recvs land.
++  if (r->relayReq) {
++    if (__atomic_load_n(&r->relayDone, __ATOMIC_ACQUIRE)) {
++      *done = 1;
++      if (sizes) for (int i = 0; i < r->nreqs; i++) sizes[i] = r->relaySize;
++      NCCLCHECK(ncclIbFreeRequest(r));
++    }
++    return ncclSuccess;
++  }
++
+   if (r->base->resiliency && r->base->resiliency->inProgress) {
+     NCCLCHECK(ncclIbResiliencyProgress(r->base->resiliency));
+   }
+diff --git a/src/transport/net_ib/reg.cc b/src/transport/net_ib/reg.cc
+index da1732cc..f0f16bb6 100644
+--- a/src/transport/net_ib/reg.cc
++++ b/src/transport/net_ib/reg.cc
+@@ -74,6 +74,14 @@ ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int
+   assert(size > 0);
+   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
+   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)malloc(sizeof(struct ncclIbMrHandle));
++  // 2-hop diagonal relay: this comm has no per-dev PD (QP setup was skipped). The relay copies
++  // data through its own pre-registered bounce buffers, so NCCL's buffer needs no registration ;
++  // hand back a dummy handle (mrs all NULL; deregMr below also short-circuits on relayFlag).
++  if (base->relayFlag) {
++    memset(mhandleWrapper->mrs, 0, sizeof(mhandleWrapper->mrs));
++    *mhandle = (void*)mhandleWrapper;
++    return ncclSuccess;
++  }
+   for (int i = 0; i < base->vProps.ndevs; i++) {
+     // Each ncclIbNetCommDevBase is at different offset in send and recv netComms
+     struct ncclIbNetCommDevBase* devComm = ncclIbGetNetCommDevBase(base, i);
+@@ -122,6 +130,8 @@ ncclResult_t ncclIbDeregMr(void* comm, void* mhandle) {
+ 
+   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)mhandle;
+   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
++  // 2-hop diagonal relay: dummy handle from regMr (mrs all NULL); nothing to deregister.
++  if (base->relayFlag) { free(mhandleWrapper); return ncclSuccess; }
+   for (int i = 0; i < base->vProps.ndevs; i++) {
+     // Each ncclIbNetCommDevBase is at different offset in send and recv netComms
+     struct ncclIbNetCommDevBase* devComm = ncclIbGetNetCommDevBase(base, i);
+diff --git a/src/transport/net_ib/relay.cc b/src/transport/net_ib/relay.cc
+new file mode 100644
+index 00000000..7259c570
+--- /dev/null
++++ b/src/transport/net_ib/relay.cc
+@@ -0,0 +1,1274 @@
++/*
++ * relay.cc; self-contained 2-hop RoCE relay overlay for a switchless 4-Spark ring.
++ *
++ * On a switchless RoCE ring only adjacent ranks are cabled, so the diagonal
++ * (non-adjacent) connections NCCL's IB transport wants; rank0<->rank2 and
++ * rank1<->rank3 on a 4-node ring; have no direct path, and stock NCCL hangs
++ * forming the QP (ibv_modify_qp errno 110 / connection timed out). This engine
++ * store-and-forwards those diagonal payloads two hops around the ring.
++ *
++ * Self-contained on purpose:
++ *   - every symbol is prefixed relay_ / g_relay_ -> links into NCCL's net_ib with
++ *     no symbol clash and no external globals; compiles as plain C++.
++ *   - lean NIC discovery: the IP comes straight from the RoCEv2 IPv4 GID (index 3).
++ *   - relay_post_recv_req takes int* done_flag / size_out / remaining (no NCCL types).
++ *   - logging is an always-on RELAY_LOG to stderr (WIP).
++ *
++ * Depends ONLY on libibverbs, pthreads, and standard POSIX/C headers.
++ */
++#define _GNU_SOURCE 1
++#include <stdio.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <pthread.h>
++#include <arpa/inet.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <netinet/in.h>
++#include <infiniband/verbs.h>
++
++#include "relay.h"
++
++/* ----------------------------------------------------------------------------
++ * Logging: always-on, flushed, stderr (WIP).
++ * -------------------------------------------------------------------------- */
++#define RELAY_LOG(fmt, ...) \
++    do { fprintf(stderr, "[NCCL-RELAY] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while (0)
++
++#define RELAY_RING_N 4
++
++/* QP work-queue depths. CRITICAL: these must be >= the buffer-pool depth (RELAY_NBUF),
++ * or only max_*_wr recvs/sends can be outstanding regardless of how many buffers exist.
++ * The original 64/64 capped the relay at 64 in-flight even with NBUF=128 ("64/128 recvs
++ * posted"); the wall behind the multi-channel 8MB hang. out_qp carries BOTH zero-copy
++ * forwards (up to NBUF) AND source sends (up to NBUF), so SQ is sized 2x. */
++#define RELAY_SQ_DEPTH 512   /* out_qp send queue: forwards + source sends */
++#define RELAY_RQ_DEPTH 256   /* in_qp recv queue: must hold all RELAY_NBUF posted recvs */
++
++/* ----------------------------------------------------------------------------
++ * Self-contained NIC struct (fields needed by the copied helpers).
++ * -------------------------------------------------------------------------- */
++struct relay_nic {
++    struct ibv_context *context;
++    struct ibv_pd      *pd;
++    int                 port_num;     /* always 1 here */
++    int                 gid_index;    /* RoCEv2 IPv4, index 3 */
++    uint32_t            ip_addr;      /* host byte order */
++    enum ibv_mtu        active_mtu;
++    union ibv_gid       cached_gid;
++    char                dev_name[64];
++};
++
++#define RELAY_MAX_NICS 8
++static struct relay_nic g_relay_nics[RELAY_MAX_NICS];
++static int g_relay_num_nics = 0;
++
++/* ----------------------------------------------------------------------------
++ * Handshake wire structs (network byte order where noted).
++ * -------------------------------------------------------------------------- */
++struct relay_qp_info {
++    uint32_t qp_num;        /* network byte order */
++    uint32_t psn;           /* network byte order */
++    uint8_t  gid[16];       /* raw GID */
++    uint32_t ip;            /* network byte order */
++    uint8_t  gid_index;
++    uint8_t  nic_idx;
++    uint8_t  noop;
++    uint8_t  reserved[1];
++};
++
++struct relay_handle {
++    uint32_t      qp_num;
++    uint32_t      psn;
++    uint16_t      lid;
++    uint8_t       port_num;
++    uint8_t       mtu;
++    union ibv_gid gid;
++};
++
++/* ----------------------------------------------------------------------------
++ * Helper: uint -> dotted-quad.
++ * -------------------------------------------------------------------------- */
++static void relay_uint_to_ip(uint32_t ip, char *buf, size_t len) {
++    struct in_addr addr;
++    addr.s_addr = htonl(ip);
++    inet_ntop(AF_INET, &addr, buf, (socklen_t)len);
++}
++
++/* ----------------------------------------------------------------------------
++ * Helper: get cached GID; cached at discovery, hand back the cached copy.
++ * -------------------------------------------------------------------------- */
++static int relay_get_gid(struct relay_nic *nic, union ibv_gid *gid) {
++    if (!nic || !gid) return -1;
++    memcpy(gid, &nic->cached_gid, sizeof(*gid));
++    return 0;
++}
++
++/* ----------------------------------------------------------------------------
++ * Lean NIC discovery; IP from the RoCEv2 IPv4 GID (index 3); no sysfs/netdev/ifaddrs.
++ * For each device: open, query port 1, query GID index 3 (RoCEv2); if it's a
++ * RoCEv2-IPv4 GID (bytes[10]==0xff && bytes[11]==0xff) pull the IP straight out
++ * of bytes[12..15]; alloc a PD; keep it. Skip devices with no IPv4 RoCEv2 GID.
++ * -------------------------------------------------------------------------- */
++static int relay_discover_nics(void) {
++    const int gid_index = 3;
++    int num_devices = 0;
++    struct ibv_device **dev_list = ibv_get_device_list(&num_devices);
++    if (!dev_list || num_devices == 0) {
++        RELAY_LOG("discover: no RDMA devices found");
++        if (dev_list) ibv_free_device_list(dev_list);
++        return -1;
++    }
++
++    g_relay_num_nics = 0;
++    for (int d = 0; d < num_devices && g_relay_num_nics < RELAY_MAX_NICS; d++) {
++        struct ibv_context *ctx = ibv_open_device(dev_list[d]);
++        if (!ctx) continue;
++
++        struct ibv_port_attr port_attr;
++        memset(&port_attr, 0, sizeof(port_attr));
++        if (ibv_query_port(ctx, 1, &port_attr) != 0) { ibv_close_device(ctx); continue; }
++
++        union ibv_gid gid;
++        memset(&gid, 0, sizeof(gid));
++        if (ibv_query_gid(ctx, 1, gid_index, &gid) != 0) { ibv_close_device(ctx); continue; }
++
++        /* RoCEv2-IPv4 GID: bytes 10-11 are 0xffff, IPv4 in bytes 12-15 (net order). */
++        if (gid.raw[10] != 0xff || gid.raw[11] != 0xff) { ibv_close_device(ctx); continue; }
++        uint32_t ip_net;
++        memcpy(&ip_net, &gid.raw[12], 4);
++        uint32_t ip_host = ntohl(ip_net);
++        if (ip_host == 0) { ibv_close_device(ctx); continue; }
++
++        struct ibv_pd *pd = ibv_alloc_pd(ctx);
++        if (!pd) { ibv_close_device(ctx); continue; }
++
++        struct relay_nic *nic = &g_relay_nics[g_relay_num_nics];
++        memset(nic, 0, sizeof(*nic));
++        nic->context    = ctx;
++        nic->pd         = pd;
++        nic->port_num   = 1;
++        nic->gid_index  = gid_index;
++        nic->ip_addr    = ip_host;
++        nic->active_mtu = port_attr.active_mtu;
++        nic->cached_gid = gid;
++        const char *dn = ibv_get_device_name(dev_list[d]);
++        if (dn) strncpy(nic->dev_name, dn, sizeof(nic->dev_name) - 1);
++
++        char ipb[INET_ADDRSTRLEN];
++        relay_uint_to_ip(ip_host, ipb, sizeof(ipb));
++        RELAY_LOG("discover: NIC %s ip=%s gid_index=%d mtu=%d",
++                  nic->dev_name, ipb, gid_index, (int)nic->active_mtu);
++        g_relay_num_nics++;
++    }
++    ibv_free_device_list(dev_list);
++
++    if (g_relay_num_nics == 0) { RELAY_LOG("discover: no IPv4 RoCEv2 NICs"); return -1; }
++    RELAY_LOG("discover: %d RoCE NIC(s) usable", g_relay_num_nics);
++    return 0;
++}
++
++/* ----------------------------------------------------------------------------
++ * Helper: create QP + CQ on a NIC.
++ * -------------------------------------------------------------------------- */
++static int relay_create_qp(struct relay_nic *nic, struct ibv_qp **qp_out, struct ibv_cq **cq_out) {
++    struct ibv_cq *cq;
++    struct ibv_qp *qp;
++    struct ibv_qp_init_attr qp_init_attr;
++    int err;
++
++    cq = ibv_create_cq(nic->context, 4096, NULL, NULL, 0);
++    if (!cq) {
++        err = errno;
++        RELAY_LOG("create_qp: CQ on %s failed: errno=%d (%s)", nic->dev_name, err, strerror(err));
++        return -1;
++    }
++
++    memset(&qp_init_attr, 0, sizeof(qp_init_attr));
++    qp_init_attr.send_cq = cq;
++    qp_init_attr.recv_cq = cq;
++    qp_init_attr.qp_type = IBV_QPT_RC;
++    qp_init_attr.cap.max_send_wr = RELAY_SQ_DEPTH;
++    qp_init_attr.cap.max_recv_wr = RELAY_RQ_DEPTH;
++    qp_init_attr.cap.max_send_sge = 1;
++    qp_init_attr.cap.max_recv_sge = 1;
++    qp_init_attr.cap.max_inline_data = 64;
++
++    qp = ibv_create_qp(nic->pd, &qp_init_attr);
++    if (!qp) {
++        err = errno;
++        RELAY_LOG("create_qp: QP on %s failed: errno=%d (%s)", nic->dev_name, err, strerror(err));
++        ibv_destroy_cq(cq);
++        return -1;
++    }
++
++    struct ibv_qp_attr qp_attr;
++    memset(&qp_attr, 0, sizeof(qp_attr));
++    qp_attr.qp_state = IBV_QPS_INIT;
++    qp_attr.pkey_index = 0;
++    qp_attr.port_num = nic->port_num;
++    qp_attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
++
++    if (ibv_modify_qp(qp, &qp_attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS)) {
++        err = errno;
++        RELAY_LOG("create_qp: INIT on %s failed: errno=%d (%s)", nic->dev_name, err, strerror(err));
++        ibv_destroy_qp(qp);
++        ibv_destroy_cq(cq);
++        return -1;
++    }
++
++    *qp_out = qp;
++    *cq_out = cq;
++    return 0;
++}
++
++/* ----------------------------------------------------------------------------
++ * Helper: connect a QP to a remote peer (RTR/RTS logic; timeout=18,
++ * retry_cnt=7, rnr_retry=7, min_rnr_timer=12,
++ * path_mtu from handle->mtu || nic->active_mtu, RoCEv2 GID ah); always uses the
++ * reliable values (no fast-fail branch).
++ * -------------------------------------------------------------------------- */
++static int relay_connect_qp(struct ibv_qp *qp, struct relay_nic *nic, struct relay_handle *remote) {
++    struct ibv_qp_attr qp_attr;
++    int ret;
++    int max_retries = 5;
++    int retry_delay_ms = 10;
++
++    enum ibv_mtu path_mtu = remote->mtu ? (enum ibv_mtu)remote->mtu : nic->active_mtu;
++
++    /* Transition to RTR (Ready to Receive). */
++    for (int attempt = 0; attempt < max_retries; attempt++) {
++        memset(&qp_attr, 0, sizeof(qp_attr));
++        qp_attr.qp_state = IBV_QPS_RTR;
++        qp_attr.path_mtu = path_mtu;
++        qp_attr.dest_qp_num = remote->qp_num;
++        qp_attr.rq_psn = remote->psn;
++        qp_attr.max_dest_rd_atomic = 1;
++        qp_attr.min_rnr_timer = 12;
++        qp_attr.ah_attr.is_global = 1;
++        qp_attr.ah_attr.grh.dgid = remote->gid;
++        qp_attr.ah_attr.grh.sgid_index = nic->gid_index;
++        qp_attr.ah_attr.grh.hop_limit = 64;
++        qp_attr.ah_attr.dlid = remote->lid;
++        qp_attr.ah_attr.sl = 0;
++        qp_attr.ah_attr.src_path_bits = 0;
++        qp_attr.ah_attr.port_num = nic->port_num;
++
++        ret = ibv_modify_qp(qp, &qp_attr,
++                IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN |
++                IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER);
++        if (ret == 0) break;
++
++        int err = errno;
++        if (attempt < max_retries - 1) {
++            RELAY_LOG("connect_qp: RTR failed (attempt %d/%d): errno=%d (%s), retry in %dms",
++                      attempt + 1, max_retries, err, strerror(err), retry_delay_ms);
++            usleep(retry_delay_ms * 1000);
++            retry_delay_ms *= 2;
++        } else {
++            RELAY_LOG("connect_qp: RTR failed after %d attempts: errno=%d (%s) dest_qp=%u gid_index=%d",
++                      max_retries, err, strerror(err), remote->qp_num, nic->gid_index);
++            return -1;
++        }
++    }
++
++    /* Transition to RTS (Ready to Send). Reliable values (no fast-fail). */
++    int qp_timeout = 18;
++    int qp_retry_cnt = 7;
++    int qp_rnr_retry = 7;
++
++    for (int attempt = 0; attempt < max_retries; attempt++) {
++        memset(&qp_attr, 0, sizeof(qp_attr));
++        qp_attr.qp_state = IBV_QPS_RTS;
++        qp_attr.timeout = qp_timeout;
++        qp_attr.retry_cnt = qp_retry_cnt;
++        qp_attr.rnr_retry = qp_rnr_retry;
++        qp_attr.sq_psn = 0;
++        qp_attr.max_rd_atomic = 1;
++
++        ret = ibv_modify_qp(qp, &qp_attr,
++                IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
++                IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC);
++        if (ret == 0) break;
++
++        int err = errno;
++        if (attempt < max_retries - 1) {
++            RELAY_LOG("connect_qp: RTS failed (attempt %d/%d): errno=%d (%s), retry in %dms",
++                      attempt + 1, max_retries, err, strerror(err), retry_delay_ms);
++            usleep(retry_delay_ms * 1000);
++            retry_delay_ms *= 2;
++        } else {
++            RELAY_LOG("connect_qp: RTS failed after %d attempts: errno=%d (%s)",
++                      max_retries, err, strerror(err));
++            return -1;
++        }
++    }
++
++    return 0;
++}
++
++/* ----------------------------------------------------------------------------
++ * Helper: create a listening handshake socket.
++ * -------------------------------------------------------------------------- */
++__attribute__((unused))
++static int relay_create_handshake_socket(uint32_t bind_ip, uint16_t *port_out) {
++    int sock;
++    struct sockaddr_in addr;
++    socklen_t addrlen = sizeof(addr);
++    int opt = 1;
++
++    sock = socket(AF_INET, SOCK_STREAM, 0);
++    if (sock < 0) { RELAY_LOG("handshake socket: %s", strerror(errno)); return -1; }
++
++    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
++
++    memset(&addr, 0, sizeof(addr));
++    addr.sin_family = AF_INET;
++    addr.sin_addr.s_addr = htonl(bind_ip);
++    addr.sin_port = 0;  /* OS picks the port */
++
++    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
++        RELAY_LOG("handshake bind: %s", strerror(errno)); close(sock); return -1;
++    }
++    if (listen(sock, 16) < 0) {
++        RELAY_LOG("handshake listen: %s", strerror(errno)); close(sock); return -1;
++    }
++    if (getsockname(sock, (struct sockaddr *)&addr, &addrlen) < 0) {
++        RELAY_LOG("handshake getsockname: %s", strerror(errno)); close(sock); return -1;
++    }
++    *port_out = ntohs(addr.sin_port);
++    return sock;
++}
++
++/* ----------------------------------------------------------------------------
++ * Helper: accept a handshake, recv remote info, send ours back. Fixed 10s
++ * recv/send timeout. Provided for completeness; the overlay's acceptor below does
++ * its own inline recv/send because it must learn the peer IP before it can create
++ * the local QP.
++ * -------------------------------------------------------------------------- */
++__attribute__((unused))
++static int relay_accept_handshake(int listen_sock, struct relay_qp_info *remote_info,
++                                  struct relay_qp_info *local_info) {
++    struct sockaddr_in addr;
++    socklen_t addrlen = sizeof(addr);
++    int conn_sock = accept(listen_sock, (struct sockaddr *)&addr, &addrlen);
++    if (conn_sock < 0) { RELAY_LOG("accept_handshake: %s", strerror(errno)); return -1; }
++
++    struct timeval tv; tv.tv_sec = 10; tv.tv_usec = 0;
++    setsockopt(conn_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++    setsockopt(conn_sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
++
++    ssize_t n = recv(conn_sock, remote_info, sizeof(*remote_info), MSG_WAITALL);
++    if (n != (ssize_t)sizeof(*remote_info)) {
++        RELAY_LOG("accept_handshake: short recv %zd", n); close(conn_sock); return -1;
++    }
++    n = send(conn_sock, local_info, sizeof(*local_info), 0);
++    if (n != (ssize_t)sizeof(*local_info)) {
++        RELAY_LOG("accept_handshake: short send %zd", n); close(conn_sock); return -1;
++    }
++    close(conn_sock);
++    return 0;
++}
++
++/* ----------------------------------------------------------------------------
++ * Helper: connect, send our QP info, recv remote's. Hardcoded retry/timeout
++ * (50 retries x 100ms; 10s send/recv timeout).
++ * -------------------------------------------------------------------------- */
++static int relay_send_handshake(uint32_t remote_ip, uint16_t remote_port,
++                                struct relay_qp_info *local_info, struct relay_qp_info *remote_info) {
++    int sock;
++    struct sockaddr_in addr;
++    int connected = 0;
++
++    int retry_interval_ms = 100;
++    int max_retries = 50;
++    int retries = max_retries;
++
++    char ip_str[INET_ADDRSTRLEN];
++    relay_uint_to_ip(remote_ip, ip_str, sizeof(ip_str));
++
++    memset(&addr, 0, sizeof(addr));
++    addr.sin_family = AF_INET;
++    addr.sin_addr.s_addr = htonl(remote_ip);
++    addr.sin_port = htons(remote_port);
++
++    while (retries > 0 && !connected) {
++        sock = socket(AF_INET, SOCK_STREAM, 0);
++        if (sock < 0) { RELAY_LOG("send_handshake socket: %s", strerror(errno)); return -1; }
++
++        int flags = fcntl(sock, F_GETFL, 0);
++        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
++
++        int ret = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
++        if (ret == 0) {
++            connected = 1;
++        } else if (errno == EINPROGRESS) {
++            fd_set writefds;
++            struct timeval tv;
++            FD_ZERO(&writefds);
++            FD_SET(sock, &writefds);
++            tv.tv_sec = 0;
++            tv.tv_usec = retry_interval_ms * 1000;
++
++            ret = select(sock + 1, NULL, &writefds, NULL, &tv);
++            if (ret > 0) {
++                int error = 0;
++                socklen_t len = sizeof(error);
++                getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len);
++                if (error == 0) connected = 1;
++                else { close(sock); retries--; }
++            } else {
++                close(sock); retries--;
++            }
++        } else {
++            close(sock); retries--;
++            usleep(retry_interval_ms * 1000);
++        }
++    }
++
++    if (!connected) {
++        RELAY_LOG("send_handshake: connect to %s:%d failed after %d retries",
++                  ip_str, remote_port, max_retries);
++        return -1;
++    }
++
++    {
++        int flags = fcntl(sock, F_GETFL, 0);
++        fcntl(sock, F_SETFL, flags & ~O_NONBLOCK);
++    }
++    {
++        struct timeval tv; tv.tv_sec = 10; tv.tv_usec = 0;
++        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
++    }
++
++    ssize_t n = send(sock, local_info, sizeof(*local_info), 0);
++    if (n != (ssize_t)sizeof(*local_info)) {
++        RELAY_LOG("send_handshake: short send %zd", n); close(sock); return -1;
++    }
++    n = recv(sock, remote_info, sizeof(*remote_info), MSG_WAITALL);
++    if (n != (ssize_t)sizeof(*remote_info)) {
++        RELAY_LOG("send_handshake: short recv %zd", n); close(sock); return -1;
++    }
++    close(sock);
++    return 0;
++}
++
++/* ============================================================================
++ * RING TOPOLOGY + ROUTING
++ * ========================================================================== */
++
++/* Signature IP (rocep1s0f0) per rank; self-detect our rank from local NIC IPs. */
++static const char *k_rank_sig_ip[RELAY_RING_N] = {
++    "10.42.0.1",  /* rank0 spark-2 */
++    "10.42.2.1",  /* rank1 spark-1 */
++    "10.42.4.1",  /* rank2 spark-3 */
++    "10.42.6.1",  /* rank3 spark-4 */
++};
++
++static int g_relay_my_rank = -1;
++
++/* Detect our rank by matching a signature IP against our local RDMA NIC IPs. */
++static int relay_ring_detect_rank(void) {
++    if (g_relay_my_rank >= 0) return g_relay_my_rank;
++    for (int n = 0; n < g_relay_num_nics; n++) {
++        char ip[INET_ADDRSTRLEN];
++        relay_uint_to_ip(g_relay_nics[n].ip_addr, ip, sizeof(ip));
++        for (int r = 0; r < RELAY_RING_N; r++) {
++            if (strcmp(ip, k_rank_sig_ip[r]) == 0) {
++                g_relay_my_rank = r;
++                RELAY_LOG("RING: detected local rank=%d (matched NIC IP %s)", r, ip);
++                return r;
++            }
++        }
++    }
++    RELAY_LOG("RING: could not detect local rank from NIC IPs; relay disabled");
++    return -1;
++}
++
++/* Next hop toward dst_rank on the ring.
++ *  -1  if dst is self or DIRECTLY adjacent (no relay; use direct QP)
++ *  intermediate rank for a diagonal (relay 2-hop).
++ * N=4: diff==1 or 3 = adjacent; diff==2 = diagonal -> relay via the next CW neighbor. */
++static int relay_ring_next_hop(int my_rank, int dst_rank) {
++    if (my_rank < 0 || dst_rank < 0 || my_rank == dst_rank) return -1;
++    int diff = (dst_rank - my_rank + RELAY_RING_N) % RELAY_RING_N;
++    if (diff == 1 || diff == RELAY_RING_N - 1) return -1;   /* adjacent: direct */
++    return (my_rank + 1) % RELAY_RING_N;                    /* diagonal: relay via next neighbor */
++}
++
++/* Map a peer's RoCE IP (network order, as advertised in a handshake) to its rank. */
++static int relay_ring_rank_of_ip(uint32_t ip_net) {
++    char ip[INET_ADDRSTRLEN];
++    relay_uint_to_ip(ntohl(ip_net), ip, sizeof(ip));
++    static const char *rank_ips[RELAY_RING_N][4] = {
++        {"10.42.0.1","10.42.1.1","10.42.6.2","10.42.7.2"}, /* rank0 spark-2 */
++        {"10.42.2.1","10.42.3.1","10.42.0.2","10.42.1.2"}, /* rank1 spark-1 */
++        {"10.42.4.1","10.42.5.1","10.42.2.2","10.42.3.2"}, /* rank2 spark-3 */
++        {"10.42.6.1","10.42.7.1","10.42.4.2","10.42.5.2"}, /* rank3 spark-4 */
++    };
++    for (int r = 0; r < RELAY_RING_N; r++)
++        for (int k = 0; k < 4; k++)
++            if (strcmp(ip, rank_ips[r][k]) == 0) return r;
++    return -1;
++}
++
++/* ============================================================================
++ * OVERLAY LEG PLUMBING
++ * ========================================================================== */
++
++#define RELAY_OVERLAY_PORT 19099   /* fixed TCP control port for relay-leg handshakes */
++
++/* Per-rank adjacent-leg table: each rank's 2 ring neighbors with (local_ip, peer_ip). */
++struct relay_leg_addr { int peer_rank; const char *local_ip; const char *peer_ip; };
++static const struct relay_leg_addr k_legs[RELAY_RING_N][2] = {
++    /* rank0 spark-2 */ {{1,"10.42.0.1","10.42.0.2"},{3,"10.42.6.2","10.42.6.1"}},
++    /* rank1 spark-1 */ {{2,"10.42.2.1","10.42.2.2"},{0,"10.42.0.2","10.42.0.1"}},
++    /* rank2 spark-3 */ {{3,"10.42.4.1","10.42.4.2"},{1,"10.42.2.2","10.42.2.1"}},
++    /* rank3 spark-4 */ {{0,"10.42.6.1","10.42.6.2"},{2,"10.42.4.2","10.42.4.1"}},
++};
++
++struct relay_leg {
++    int peer_rank;
++    struct relay_nic *nic;
++    struct ibv_qp *out_qp; struct ibv_cq *out_cq; int out_up;
++    struct ibv_qp *in_qp;  struct ibv_cq *in_cq;  int in_up;
++};
++static struct relay_leg g_relay_legs[RELAY_RING_N];   /* indexed by peer rank */
++
++static int g_relay_listen_sock = -1;
++static pthread_t g_relay_acceptor_thread;
++
++/* local NIC whose IP exactly equals `ip` (host order) */
++static struct relay_nic *relay_overlay_nic_by_ip(uint32_t ip) {
++    for (int i = 0; i < g_relay_num_nics; i++)
++        if (g_relay_nics[i].ip_addr == ip) return &g_relay_nics[i];
++    return NULL;
++}
++
++/* local NIC on the same /30 as a peer IP (host order). The lean discovery doesn't
++ * keep a netmask, so we use the known ring /30s: peer_ip & ~3 == local_ip & ~3. */
++static struct relay_nic *relay_overlay_nic_for_peer(uint32_t peer_ip_h) {
++    uint32_t peer_subnet = peer_ip_h & 0xFFFFFFFCu;   /* /30 */
++    for (int i = 0; i < g_relay_num_nics; i++) {
++        if ((g_relay_nics[i].ip_addr & 0xFFFFFFFCu) == peer_subnet) return &g_relay_nics[i];
++    }
++    return NULL;
++}
++
++/* fill our side of a leg QP handshake info on `nic` */
++static void relay_overlay_fill_local(struct relay_qp_info *li, struct relay_nic *nic, struct ibv_qp *qp) {
++    memset(li, 0, sizeof(*li));
++    li->qp_num = htonl(qp->qp_num);
++    li->psn = htonl(0);
++    li->ip = htonl(nic->ip_addr);
++    li->gid_index = (uint8_t)nic->gid_index;
++    union ibv_gid og;
++    if (relay_get_gid(nic, &og) == 0) memcpy(li->gid, og.raw, 16);
++}
++
++/* build a connect handle from a peer's handshake info (mirrors the normal connect path) */
++static void relay_overlay_build_handle(struct relay_handle *h, struct relay_nic *nic,
++                                       const struct relay_qp_info *ri) {
++    memset(h, 0, sizeof(*h));
++    h->qp_num   = ntohl(ri->qp_num);
++    h->psn      = ntohl(ri->psn);
++    h->lid      = 0;
++    h->port_num = (uint8_t)nic->port_num;
++    h->mtu      = (uint8_t)nic->active_mtu;
++    union ibv_gid g; memset(&g, 0, sizeof(g));
++    g.raw[10] = 0xff; g.raw[11] = 0xff;
++    uint32_t rip = ri->ip;                 /* already network order from handshake */
++    memcpy(&g.raw[12], &rip, 4);
++    h->gid = g;
++}
++
++/* DIALER: establish our out_qp to neighbor `peer_rank`'s overlay listener */
++static int relay_overlay_dial(uint32_t local_ip_h, uint32_t peer_ip_h, int peer_rank) {
++    struct relay_nic *nic = relay_overlay_nic_by_ip(local_ip_h);
++    if (!nic) { RELAY_LOG("OVERLAY dial: no local NIC matching our %08x", local_ip_h); return -1; }
++    struct ibv_qp *qp; struct ibv_cq *cq;
++    if (relay_create_qp(nic, &qp, &cq) != 0) { RELAY_LOG("OVERLAY dial: create_qp failed"); return -1; }
++    struct relay_qp_info li, ri; memset(&ri, 0, sizeof(ri));
++    relay_overlay_fill_local(&li, nic, qp);
++    if (relay_send_handshake(peer_ip_h, RELAY_OVERLAY_PORT, &li, &ri) != 0) {
++        RELAY_LOG("OVERLAY dial: handshake to rank%d failed", peer_rank);
++        ibv_destroy_qp(qp); ibv_destroy_cq(cq); return -1;
++    }
++    usleep(1000);
++    struct relay_handle h; relay_overlay_build_handle(&h, nic, &ri);
++    if (relay_connect_qp(qp, nic, &h) != 0) {
++        RELAY_LOG("OVERLAY dial: connect_qp to rank%d failed", peer_rank);
++        ibv_destroy_qp(qp); ibv_destroy_cq(cq); return -1;
++    }
++    g_relay_legs[peer_rank].peer_rank = peer_rank;
++    g_relay_legs[peer_rank].nic = nic;
++    g_relay_legs[peer_rank].out_qp = qp; g_relay_legs[peer_rank].out_cq = cq; g_relay_legs[peer_rank].out_up = 1;
++    RELAY_LOG("OVERLAY leg OUT up: rank%d -> rank%d (local_qp=%u remote_qp=%u)",
++              g_relay_my_rank, peer_rank, qp->qp_num, h.qp_num);
++    return 0;
++}
++
++/* ACCEPTOR: inbound legs from our 2 neighbors. Recv-first (dialer sends first) so we
++ * learn the peer IP, pick the facing NIC, create our in_qp, send our info back, connect. */
++static void *relay_overlay_acceptor(void *arg) {
++    (void)arg;
++    int expect = 2, got = 0;
++    while (got < expect) {
++        struct sockaddr_in ca; socklen_t cl = sizeof(ca);
++        int cs = accept(g_relay_listen_sock, (struct sockaddr *)&ca, &cl);
++        if (cs < 0) {
++            if (errno == EINTR) continue;
++            RELAY_LOG("OVERLAY accept: %s (got %d/%d in-legs)", strerror(errno), got, expect);
++            break;
++        }
++        struct relay_qp_info ri, li; memset(&ri, 0, sizeof(ri));
++        if (recv(cs, &ri, sizeof(ri), MSG_WAITALL) != (ssize_t)sizeof(ri)) {
++            RELAY_LOG("OVERLAY accept: short recv"); close(cs); continue;
++        }
++        uint32_t peer_ip_h = ntohl(ri.ip);
++        int prank = relay_ring_rank_of_ip(ri.ip);
++        struct relay_nic *nic = relay_overlay_nic_for_peer(peer_ip_h);
++        if (!nic || prank < 0) { RELAY_LOG("OVERLAY accept: unknown peer %08x", peer_ip_h); close(cs); continue; }
++        struct ibv_qp *qp; struct ibv_cq *cq;
++        if (relay_create_qp(nic, &qp, &cq) != 0) { RELAY_LOG("OVERLAY accept: create_qp failed"); close(cs); continue; }
++        relay_overlay_fill_local(&li, nic, qp);
++        if (send(cs, &li, sizeof(li), 0) != (ssize_t)sizeof(li)) {
++            RELAY_LOG("OVERLAY accept: send failed"); ibv_destroy_qp(qp); ibv_destroy_cq(cq); close(cs); continue;
++        }
++        close(cs);
++        struct relay_handle h; relay_overlay_build_handle(&h, nic, &ri);
++        if (relay_connect_qp(qp, nic, &h) != 0) {
++            RELAY_LOG("OVERLAY accept: connect_qp failed"); ibv_destroy_qp(qp); ibv_destroy_cq(cq); continue;
++        }
++        g_relay_legs[prank].peer_rank = prank;
++        if (!g_relay_legs[prank].nic) g_relay_legs[prank].nic = nic;
++        g_relay_legs[prank].in_qp = qp; g_relay_legs[prank].in_cq = cq; g_relay_legs[prank].in_up = 1;
++        RELAY_LOG("OVERLAY leg IN up: rank%d <- rank%d (local_qp=%u remote_qp=%u)",
++                  g_relay_my_rank, prank, qp->qp_num, h.qp_num);
++        got++;
++    }
++    RELAY_LOG("OVERLAY acceptor done: %d/%d in-legs up", got, expect);
++    return NULL;
++}
++
++/* ============================================================================
++ * STORE-AND-FORWARD DATA PATH
++ * ========================================================================== */
++#define RELAY_BUF_SZ    (1024*1024)   /* must hold NCCL's largest net chunk (~256-512KB) + hdr */
++#define RELAY_NBUF      128           /* pipeline depth; enough outstanding recvs to absorb NCCL's bursts */
++#define RELAY_HDR_MAGIC 0x52454c59u   /* "RELY" */
++
++struct relay_hdr { uint32_t magic; int32_t src_rank; int32_t dst_rank; uint32_t conn_id; uint32_t seq; uint32_t len; };
++
++struct relay_leg_bufs {
++    char *recv_slab; struct ibv_mr *recv_mr;
++    char *send_slab; struct ibv_mr *send_mr;
++    int send_rr;
++    // Zero-copy forward: this leg's recv_slab is ALSO registered on the OTHER leg's PD, so an
++    // intermediate can RDMA-send a received chunk straight to the next hop without a memcpy.
++    struct ibv_mr *fwd_mr;   // recv_slab MR on the other leg's PD
++    int fwd_out_neighbor;    // the other leg's peer rank (where forwards from this leg go)
++};
++static struct relay_leg_bufs g_relay_legbufs[RELAY_RING_N];   /* indexed by peer rank */
++
++/* per-leg cumulative counters (diagnostic): chunks received on each in-leg, chunks posted on each
++ * out-leg. Lets the heartbeat pinpoint which HOP a stuck conn's data dies at. */
++static uint64_t g_leg_rx[RELAY_RING_N], g_leg_tx[RELAY_RING_N];
++
++/* per-out-leg SOURCE send-slab flow control. The send_slab is RELAY_NBUF buffers reused round-robin;
++ * the SQ is deeper (RELAY_SQ_DEPTH), so without gating, posted laps an in-flight send and overwrites
++ * its buffer (header conn_id!) WHILE the NIC is still transmitting -> chunk delivered to the WRONG
++ * conn. g_send_posted is the next slot to claim; g_send_done is advanced by the pump as source-send
++ * completions are reaped. A slot is reusable only once (posted - done) < RELAY_NBUF. */
++static uint64_t g_send_posted[RELAY_RING_N], g_send_done[RELAY_RING_N];
++static pthread_mutex_t g_relay_send_mtx[RELAY_RING_N];        /* serialize posts per out leg */
++static pthread_t g_relay_pump_thread;
++static volatile int g_relay_pump_run = 0;
++static int g_relay_up = 0;
++
++/* ---- per-connection delivery matching (demux diagonal conns over shared legs) ---- */
++#define RELAY_RCONN_MAX 512
++#define RELAY_RCONN_QD  512
++
++/* A pending recv: caller-owned buffer + completion signaling (NCCL-free).
++ *   *remaining is decremented under g_relay_rconn_mtx when this sub-recv is filled;
++ *   *size_out is set to the bytes copied; when *remaining hits 0, *done_flag=1. */
++struct relay_pending {
++    void    *buf;
++    uint32_t max;
++    int     *done_flag;
++    int     *size_out;
++    int     *remaining;
++};
++struct relay_delivered { void *data; uint32_t len; };
++struct relay_rconn {
++    int in_use; int src_rank; uint32_t conn_id;
++    struct relay_pending   pend[RELAY_RCONN_QD];  int pend_h, pend_t;
++    struct relay_delivered deliv[RELAY_RCONN_QD]; int deliv_h, deliv_t;
++    uint64_t n_deliv;   /* cumulative chunks delivered to this rconn (diagnostic) */
++};
++static struct relay_rconn g_relay_rconns[RELAY_RCONN_MAX];
++static pthread_mutex_t g_relay_rconn_mtx = PTHREAD_MUTEX_INITIALIZER;
++static uint32_t g_relay_conn_seq = 0;
++
++/* diagnostic: per-conn cumulative SOURCE sends (this rank as originator). conn_ids come from a
++ * small monotonic counter, so a flat array indexed by conn_id is fine for the repro. */
++#define RELAY_MAXCONN 4096
++static uint64_t g_src_sent[RELAY_MAXCONN];
++
++static struct relay_rconn *rconn_find(int src, uint32_t cid) {
++    for (int i = 0; i < RELAY_RCONN_MAX; i++)
++        if (g_relay_rconns[i].in_use && g_relay_rconns[i].src_rank == src && g_relay_rconns[i].conn_id == cid)
++            return &g_relay_rconns[i];
++    return NULL;
++}
++
++/* pair head pending with head delivered (caller holds g_relay_rconn_mtx). For a
++ * grouped recv the caller registers n sub-recvs sharing one done_flag + remaining;
++ * the group completes when the last sub-recv decrements remaining to 0. */
++static void rconn_try_match(struct relay_rconn *rc) {
++    while (rc->pend_h != rc->pend_t && rc->deliv_h != rc->deliv_t) {
++        struct relay_pending *p = &rc->pend[rc->pend_h];
++        struct relay_delivered *d = &rc->deliv[rc->deliv_h];
++        uint32_t cp = d->len < p->max ? d->len : p->max;
++        memcpy(p->buf, d->data, cp);
++        if (p->size_out) *p->size_out = (int)cp;
++        int done_now = 1;
++        if (p->remaining) done_now = (--(*p->remaining) <= 0);
++        if (done_now && p->done_flag) __atomic_store_n(p->done_flag, 1, __ATOMIC_RELEASE);
++        free(d->data);
++        rc->pend_h  = (rc->pend_h  + 1) % RELAY_RCONN_QD;
++        rc->deliv_h = (rc->deliv_h + 1) % RELAY_RCONN_QD;
++    }
++}
++
++/* pump -> deliver a payload for (src,conn). returns 1 if routed to an rconn, 0 if none */
++static int relay_deliver(int src, uint32_t conn_id, const void *payload, uint32_t len) {
++    pthread_mutex_lock(&g_relay_rconn_mtx);
++    struct relay_rconn *rc = rconn_find(src, conn_id);
++    if (!rc) {
++        // The overlay legs are up from init, so a sender can push data the instant ITS connect
++        // completes; BEFORE this receiver's accept runs relay_register_rconn (or NCCL posts the
++        // irecv). Rare with few conns, near-certain once many channels ramp (large all_reduce).
++        // Create the rconn lazily and BUFFER the chunk; NEVER drop: a dropped chunk makes NCCL
++        // wait forever for a step that never completes, freezing the whole collective.
++        for (int i = 0; i < RELAY_RCONN_MAX; i++) if (!g_relay_rconns[i].in_use) {
++            memset(&g_relay_rconns[i], 0, sizeof(g_relay_rconns[i]));
++            g_relay_rconns[i].in_use = 1; g_relay_rconns[i].src_rank = src; g_relay_rconns[i].conn_id = conn_id;
++            rc = &g_relay_rconns[i]; break;
++        }
++        if (!rc) { pthread_mutex_unlock(&g_relay_rconn_mtx); RELAY_LOG("RELAY: rconn table full; DROP src=%d conn=%u", src, conn_id); return 0; }
++    }
++    int nt = (rc->deliv_t + 1) % RELAY_RCONN_QD;
++    if (nt == rc->deliv_h) { RELAY_LOG("RELAY: deliver queue full src=%d conn=%u", src, conn_id); }
++    else {
++        void *cpy = malloc(len ? len : 1);
++        if (cpy) { memcpy(cpy, payload, len); rc->deliv[rc->deliv_t].data = cpy; rc->deliv[rc->deliv_t].len = len; rc->deliv_t = nt; rc->n_deliv++; }
++        rconn_try_match(rc);
++    }
++    pthread_mutex_unlock(&g_relay_rconn_mtx);
++    return 1;
++}
++
++/* register a recv slab + a send slab on a leg's NIC PD (host buffers; GB10 has no GDR) */
++static int relay_leg_alloc_bufs(int prank) {
++    struct relay_leg *L = &g_relay_legs[prank];
++    if (!L->nic) { RELAY_LOG("RELAY: leg rank%d has no nic", prank); return -1; }
++    struct relay_leg_bufs *b = &g_relay_legbufs[prank];
++    size_t sz = (size_t)RELAY_BUF_SZ * RELAY_NBUF;
++    b->recv_slab = (char *)aligned_alloc(4096, sz);
++    b->send_slab = (char *)aligned_alloc(4096, sz);
++    if (!b->recv_slab || !b->send_slab) { RELAY_LOG("RELAY: slab alloc failed rank%d", prank); return -1; }
++    b->recv_mr = ibv_reg_mr(L->nic->pd, b->recv_slab, sz, IBV_ACCESS_LOCAL_WRITE);
++    b->send_mr = ibv_reg_mr(L->nic->pd, b->send_slab, sz, IBV_ACCESS_LOCAL_WRITE);
++    if (!b->recv_mr || !b->send_mr) { RELAY_LOG("RELAY: reg_mr failed rank%d", prank); return -1; }
++    return 0;
++}
++
++static int relay_leg_post_recv(int prank, int idx) {
++    struct relay_leg_bufs *b = &g_relay_legbufs[prank];
++    struct ibv_sge sge; memset(&sge, 0, sizeof(sge));
++    sge.addr = (uintptr_t)(b->recv_slab + (size_t)idx * RELAY_BUF_SZ);
++    sge.length = RELAY_BUF_SZ;
++    sge.lkey = b->recv_mr->lkey;
++    struct ibv_recv_wr wr, *bad; memset(&wr, 0, sizeof(wr));
++    wr.wr_id = ((uint64_t)(uint32_t)prank << 32) | (uint32_t)idx;
++    wr.sg_list = &sge; wr.num_sge = 1;
++    return ibv_post_recv(g_relay_legs[prank].in_qp, &wr, &bad);
++}
++
++static int relay_reap_out_cq(int outn);   /* fwd decl: defined below, used by the send-slab gate */
++
++/* copy a full packet (already hdr+payload) into out_neighbor's next send buffer and SEND. */
++static int relay_post_send(int out_neighbor, const void *data, uint32_t len) {
++    if (out_neighbor < 0 || out_neighbor >= RELAY_RING_N) { RELAY_LOG("RELAY: out_neighbor %d OOR", out_neighbor); return -1; }
++    struct relay_leg_bufs *b = &g_relay_legbufs[out_neighbor];
++    if (!b->send_mr || !g_relay_legs[out_neighbor].out_up) { RELAY_LOG("RELAY: no out leg to rank%d", out_neighbor); return -1; }
++    if (len > RELAY_BUF_SZ) { RELAY_LOG("RELAY: pkt %u > buf", len); return -1; }
++    pthread_mutex_lock(&g_relay_send_mtx[out_neighbor]);
++    // Same send-slab flow control as relay_send_msg. This runs on the PUMP thread (sole out_cq
++    // reaper), so we reap INLINE to advance g_send_done; a usleep-wait here would self-deadlock.
++    for (int spins = 0;
++         (g_send_posted[out_neighbor] - g_send_done[out_neighbor]) >= RELAY_NBUF && spins < 5000000;
++         spins++) {
++        relay_reap_out_cq(out_neighbor);
++    }
++    int idx = (int)(g_send_posted[out_neighbor] % RELAY_NBUF);
++    char *buf = b->send_slab + (size_t)idx * RELAY_BUF_SZ;
++    memcpy(buf, data, len);
++    struct ibv_sge sge; memset(&sge, 0, sizeof(sge));
++    sge.addr = (uintptr_t)buf; sge.length = len; sge.lkey = b->send_mr->lkey;
++    struct ibv_send_wr wr, *bad; memset(&wr, 0, sizeof(wr));
++    wr.wr_id = 0x5e4d; wr.sg_list = &sge; wr.num_sge = 1;
++    wr.opcode = IBV_WR_SEND; wr.send_flags = IBV_SEND_SIGNALED;
++    int rc = ibv_post_send(g_relay_legs[out_neighbor].out_qp, &wr, &bad);
++    if (rc == 0) { g_send_posted[out_neighbor]++; __atomic_fetch_add(&g_leg_tx[out_neighbor], 1, __ATOMIC_RELAXED); }
++    pthread_mutex_unlock(&g_relay_send_mtx[out_neighbor]);
++    return rc;
++}
++
++/* ---- throughput de-risk benchmark (gated NCCL_RELAY_BENCH) ---- */
++#define RELAY_BENCH_CONN 0xBE11u
++#define RELAY_BENCH_SZ   262144      /* 256KB messages; same size NCCL net chunks use */
++#define RELAY_BENCH_N    3000        /* ~768 MB per target */
++static uint64_t g_bench_bytes[RELAY_RING_N];
++static double   g_bench_t0[RELAY_RING_N];
++static int      g_bench_on[RELAY_RING_N];
++static double relay_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec + t.tv_nsec * 1e-9; }
++static void relay_bench_account(int src, uint32_t len) {
++    if (src < 0 || src >= RELAY_RING_N) return;
++    if (!g_bench_on[src]) { g_bench_on[src] = 1; g_bench_t0[src] = relay_now(); g_bench_bytes[src] = 0; }
++    uint64_t prev = g_bench_bytes[src];
++    g_bench_bytes[src] += len;
++    if ((prev / (64u << 20)) != (g_bench_bytes[src] / (64u << 20))) {   /* every ~64MB */
++        double dt = relay_now() - g_bench_t0[src];
++        if (dt > 0) RELAY_LOG("BENCH: recv from rank%d: %.0f MB in %.2fs = %.2f GB/s (sustained)",
++                              src, g_bench_bytes[src] / 1e6, dt, g_bench_bytes[src] / 1e9 / dt);
++    }
++}
++static void *relay_bench_sender(void *arg) {
++    (void)arg;
++    sleep(9);   /* let all legs settle */
++    static char payload[RELAY_BENCH_SZ];
++    memset(payload, 0x5a, sizeof(payload));
++    int targets[2] = { 1, 2 };   /* rank1 = adjacent leg; rank2 = diagonal (relay via rank1) */
++    for (int t = 0; t < 2; t++) {
++        int dst = targets[t];
++        RELAY_LOG("BENCH: rank0 -> rank%d  %d x %dKB (%s) ...", dst, RELAY_BENCH_N, RELAY_BENCH_SZ / 1024,
++                  dst == 1 ? "adjacent leg" : "diagonal relay");
++        double s = relay_now();
++        for (int i = 0; i < RELAY_BENCH_N; i++) {
++            while (relay_send_msg(dst, RELAY_BENCH_CONN, payload, RELAY_BENCH_SZ) != 0) usleep(100);
++            if ((i & 31) == 31) usleep(50);   /* gentle pacing so we measure drain, not memcpy */
++        }
++        double e = relay_now();
++        RELAY_LOG("BENCH: rank0 send-loop -> rank%d done %.2fs (post-side %.2f GB/s)",
++                  dst, e - s, (double)RELAY_BENCH_N * RELAY_BENCH_SZ / 1e9 / (e - s));
++        sleep(3);
++    }
++    return NULL;
++}
++
++/* handle one received relay packet sitting in leg `prank` recv buffer `idx` */
++static uint64_t g_relay_rx = 0;   /* received-packet counter (for gated diagnostics) */
++
++#define RELAY_FWD_WRID_BIT (1ULL << 63)   /* marks an out_cq completion as a zero-copy forward send */
++
++// Reap one out-leg's send completions, freeing SQ slots. A completed zero-copy forward (wr_id has
++// RELAY_FWD_WRID_BIT set) means the recv buffer it held can be reposted. MUST be called only from
++// the pump thread (the sole reaper of out_cq); relay_handle runs in that thread, so its inline
++// retry-reaps are safe; source sends (relay_send_msg, other thread) wait for the pump to reap.
++static int relay_reap_out_cq(int outn) {
++    if (outn < 0 || outn >= RELAY_RING_N || !g_relay_legs[outn].out_cq) return 0;
++    struct ibv_wc swc[16];
++    int sne = ibv_poll_cq(g_relay_legs[outn].out_cq, 16, swc);
++    for (int i = 0; i < sne; i++) {
++        if (swc[i].wr_id & RELAY_FWD_WRID_BIT) {
++            int fp   = (int)((swc[i].wr_id >> 32) & 0x7fffffff);
++            int fidx = (int)(swc[i].wr_id & 0xffffffff);
++            relay_leg_post_recv(fp, fidx);
++        } else {
++            // a source / copy-forward send (from the send_slab) completed -> free its slab slot
++            __atomic_fetch_add(&g_send_done[outn], 1, __ATOMIC_RELAXED);
++        }
++    }
++    return sne;
++}
++
++/* ---- non-blocking forward queue (the deadlock-free heart of multi-channel forwarding) ----
++ * A chunk that must be forwarded is NOT posted inline (which would force the single-threaded pump
++ * to block on a full SQ, deadlocking the ring) and NEVER dropped (which hangs NCCL). Instead it is
++ * enqueued here; the recv buffer holds the bytes until the pump's flush posts a zero-copy send from
++ * it, and the buffer reposts on that send's completion. Because the pump always keeps delivering
++ * FINAL chunks (host-copy + immediate repost) regardless of forward backpressure, RQ space always
++ * frees somewhere on the ring, so the queued forwards always drain. Pump-thread-only (no lock). */
++struct relay_fwd_pending { int in_prank; int in_idx; uint32_t tot; };
++#define RELAY_FWDQ (RELAY_NBUF * 2 + 8)   /* >= max recv buffers that can be held awaiting a forward */
++static struct relay_fwd_pending g_fwd_q[RELAY_RING_N][RELAY_FWDQ];   /* indexed by out_neighbor */
++static int g_fwd_h[RELAY_RING_N], g_fwd_t[RELAY_RING_N];
++
++static void relay_fwd_enqueue(int outn, int in_prank, int in_idx, uint32_t tot) {
++    int nt = (g_fwd_t[outn] + 1) % RELAY_FWDQ;
++    if (nt == g_fwd_h[outn]) {   /* should not happen (depth >= 2*NBUF); degrade to copy-forward + repost */
++        RELAY_LOG("RELAY: fwd queue full out=%d; copy-forward fallback", outn);
++        char *buf = g_relay_legbufs[in_prank].recv_slab + (size_t)in_idx * RELAY_BUF_SZ;
++        relay_post_send(outn, buf, tot);
++        relay_leg_post_recv(in_prank, in_idx);
++        return;
++    }
++    g_fwd_q[outn][g_fwd_t[outn]].in_prank = in_prank;
++    g_fwd_q[outn][g_fwd_t[outn]].in_idx   = in_idx;
++    g_fwd_q[outn][g_fwd_t[outn]].tot      = tot;
++    g_fwd_t[outn] = nt;
++}
++
++/* Post as many queued forwards toward `outn` as the SQ accepts. On ENOMEM, reap and stop; the next
++ * pump iteration retries (microseconds later). Returns the number posted (for the idle-backoff). */
++static int relay_fwd_flush(int outn) {
++    if (outn < 0 || outn >= RELAY_RING_N) return 0;
++    int posted = 0;
++    while (g_fwd_h[outn] != g_fwd_t[outn]) {
++        struct relay_fwd_pending *e = &g_fwd_q[outn][g_fwd_h[outn]];
++        struct relay_leg_bufs *ib = &g_relay_legbufs[e->in_prank];
++        char *buf = ib->recv_slab + (size_t)e->in_idx * RELAY_BUF_SZ;
++        if (!ib->fwd_mr || ib->fwd_out_neighbor != outn || !g_relay_legs[outn].out_up) {
++            relay_post_send(outn, buf, e->tot);                 /* no zero-copy MR: copy-forward + repost */
++            relay_leg_post_recv(e->in_prank, e->in_idx);
++            g_fwd_h[outn] = (g_fwd_h[outn] + 1) % RELAY_FWDQ; posted++;
++            continue;
++        }
++        struct ibv_sge sge; memset(&sge, 0, sizeof(sge));
++        sge.addr = (uintptr_t)buf; sge.length = e->tot; sge.lkey = ib->fwd_mr->lkey;
++        struct ibv_send_wr wr, *bad; memset(&wr, 0, sizeof(wr));
++        wr.wr_id = RELAY_FWD_WRID_BIT | ((uint64_t)(uint32_t)e->in_prank << 32) | (uint32_t)e->in_idx;
++        wr.sg_list = &sge; wr.num_sge = 1; wr.opcode = IBV_WR_SEND; wr.send_flags = IBV_SEND_SIGNALED;
++        pthread_mutex_lock(&g_relay_send_mtx[outn]);
++        int rc = ibv_post_send(g_relay_legs[outn].out_qp, &wr, &bad);
++        pthread_mutex_unlock(&g_relay_send_mtx[outn]);
++        if (rc == ENOMEM) { relay_reap_out_cq(outn); break; }   /* SQ full; retry next pump iteration */
++        if (rc != 0) {                                          /* genuine error: drop+repost, don't wedge */
++            RELAY_LOG("RELAY: fwd flush post failed rc=%d (rank%d->%d)", rc, e->in_prank, outn);
++            relay_leg_post_recv(e->in_prank, e->in_idx);
++        } else __atomic_fetch_add(&g_leg_tx[outn], 1, __ATOMIC_RELAXED);
++        g_fwd_h[outn] = (g_fwd_h[outn] + 1) % RELAY_FWDQ;       /* posted (in-flight); reposts on completion */
++        posted++;
++    }
++    return posted;
++}
++
++// Returns 1 if the recv buffer's repost is DEFERRED (handed to the forward queue / a zero-copy send
++// is in flight); 0 if the caller should repost immediately (final delivery or a dropped packet).
++static int relay_handle(int prank, int idx) {
++    if (prank < 0 || prank >= RELAY_RING_N || idx < 0 || idx >= RELAY_NBUF || !g_relay_legbufs[prank].recv_slab) {
++        RELAY_LOG("RELAY: bad recv id prank=%d idx=%d", prank, idx); return 0;
++    }
++    char *buf = g_relay_legbufs[prank].recv_slab + (size_t)idx * RELAY_BUF_SZ;
++    struct relay_hdr *h = (struct relay_hdr *)buf;
++    if (h->magic != RELAY_HDR_MAGIC) { RELAY_LOG("RELAY: bad magic 0x%x leg rank%d", h->magic, prank); return 0; }
++    if (h->src_rank < 0 || h->src_rank >= RELAY_RING_N || h->dst_rank < 0 || h->dst_rank >= RELAY_RING_N ||
++        h->len > RELAY_BUF_SZ - sizeof(*h)) {
++        RELAY_LOG("RELAY: bad hdr src=%d dst=%d len=%u (leg rank%d idx%d)", h->src_rank, h->dst_rank, h->len, prank, idx);
++        return 0;
++    }
++    if (g_relay_rx++ < 12)
++        RELAY_LOG("RELAY rx#%llu: leg rank%d src=%d dst=%d conn=%u len=%u",
++                  (unsigned long long)g_relay_rx, prank, h->src_rank, h->dst_rank, h->conn_id, h->len);
++    if (h->dst_rank == g_relay_my_rank) {
++        if (h->conn_id == RELAY_BENCH_CONN) { relay_bench_account(h->src_rank, h->len); return 0; }
++        int matched = relay_deliver(h->src_rank, h->conn_id, buf + sizeof(*h), h->len);
++        if (!matched && g_relay_rx < 12)
++            RELAY_LOG("RELAY DELIVERED(unmatched): src=rank%d conn=%u len=%u", h->src_rank, h->conn_id, h->len);
++        return 0;   // delivered (copied out by relay_deliver); repost immediately
++    }
++    // Intermediate forward. Hand the chunk to the non-blocking forward queue: the pump's flush posts
++    // a zero-copy RDMA-send straight from this recv buffer to the next hop (no memcpy) when the SQ
++    // has room, and the buffer reposts on that send's completion. NEVER post inline (a full SQ would
++    // block the single-threaded pump and deadlock the ring) and NEVER drop (NCCL would hang).
++    int nh = relay_ring_next_hop(g_relay_my_rank, h->dst_rank);
++    int out_neighbor = (nh < 0) ? h->dst_rank : nh;
++    uint32_t tot = (uint32_t)(sizeof(*h) + h->len);
++    if (out_neighbor < 0 || out_neighbor >= RELAY_RING_N) { RELAY_LOG("RELAY: fwd out %d OOR", out_neighbor); return 0; }
++    relay_fwd_enqueue(out_neighbor, prank, idx, tot);
++    return 1;   // held by the forward queue; do NOT repost (recv buffer holds the bytes until forwarded)
++}
++
++/* Heartbeat/stall diagnostic (gated NCCL_RELAY_DIAG). Prints, ~1/s, the relay's live internal
++ * state so a silent hang is no longer invisible: total rx, per-out-neighbor forward-queue depth,
++ * and every busy rconn's pending-recv (p) and undelivered (d) depths. Reads at the source. */
++static void relay_diag_dump(void) {
++    static int on = -1;
++    static double last = 0;
++    if (on < 0) on = getenv("NCCL_RELAY_DIAG") ? 1 : 0;
++    if (!on) return;
++    double now = relay_now();
++    if (now - last < 1.0) return;
++    last = now;
++    int me = g_relay_my_rank;
++    int o0 = k_legs[me][0].peer_rank, o1 = k_legs[me][1].peer_rank;
++    int q0 = (g_fwd_t[o0] - g_fwd_h[o0] + RELAY_FWDQ) % RELAY_FWDQ;
++    int q1 = (g_fwd_t[o1] - g_fwd_h[o1] + RELAY_FWDQ) % RELAY_FWDQ;
++    char rcs[700]; int p = 0; rcs[0] = 0;
++    pthread_mutex_lock(&g_relay_rconn_mtx);
++    for (int i = 0; i < RELAY_RCONN_MAX && p < 640; i++) {
++        struct relay_rconn *rc = &g_relay_rconns[i];
++        if (!rc->in_use) continue;
++        int pd = (rc->pend_t - rc->pend_h + RELAY_RCONN_QD) % RELAY_RCONN_QD;
++        int dd = (rc->deliv_t - rc->deliv_h + RELAY_RCONN_QD) % RELAY_RCONN_QD;
++        if (pd || dd) p += snprintf(rcs + p, sizeof(rcs) - p, " s%dc%u(p%d,d%d,rcv%llu)",
++                                    rc->src_rank, rc->conn_id, pd, dd, (unsigned long long)rc->n_deliv);
++    }
++    pthread_mutex_unlock(&g_relay_rconn_mtx);
++    char snt[400]; int sp = 0; snt[0] = 0;
++    for (uint32_t c = 0; c < RELAY_MAXCONN && sp < 360; c++)
++        if (g_src_sent[c]) sp += snprintf(snt + sp, sizeof(snt) - sp, " c%u=%llu", c, (unsigned long long)g_src_sent[c]);
++    RELAY_LOG("HB rank%d rx=%llu legrx[%d]=%llu legrx[%d]=%llu legtx[->%d]=%llu legtx[->%d]=%llu fwdq[->%d]=%d fwdq[->%d]=%d sent:%s rconns:%s",
++              me, (unsigned long long)g_relay_rx,
++              o0, (unsigned long long)g_leg_rx[o0], o1, (unsigned long long)g_leg_rx[o1],
++              o0, (unsigned long long)g_leg_tx[o0], o1, (unsigned long long)g_leg_tx[o1],
++              o0, q0, o1, q1, snt, rcs);
++}
++
++static void *relay_pump(void *arg) {
++    (void)arg;
++    int me = g_relay_my_rank;
++    int prs[2] = { k_legs[me][0].peer_rank, k_legs[me][1].peer_rank };
++    RELAY_LOG("RELAY pump: rank%d polling in-legs from rank%d, rank%d", me, prs[0], prs[1]);
++    while (g_relay_pump_run) {
++        int didwork = 0;
++        relay_diag_dump();
++        for (int k = 0; k < 2; k++) {
++            int pr = prs[k];
++            struct ibv_wc wc[8];
++            if (g_relay_legs[pr].in_cq) {              /* skip a leg that never came up */
++                int ne = ibv_poll_cq(g_relay_legs[pr].in_cq, 8, wc);
++                if (ne > 0) didwork = 1;
++                for (int i = 0; i < ne; i++) {
++                    if (wc[i].status == IBV_WC_SUCCESS && wc[i].opcode == IBV_WC_RECV) {
++                        int lpr = (int)(wc[i].wr_id >> 32);
++                        int idx = (int)(wc[i].wr_id & 0xffffffff);
++                        if (lpr >= 0 && lpr < RELAY_RING_N) __atomic_fetch_add(&g_leg_rx[lpr], 1, __ATOMIC_RELAXED);
++                        int deferred = relay_handle(lpr, idx);
++                        if (!deferred) relay_leg_post_recv(lpr, idx);   // zero-copy fwd reposts on send completion
++                    } else if (wc[i].status != IBV_WC_SUCCESS) {
++                        RELAY_LOG("RELAY: in wc status=%d leg rank%d", wc[i].status, pr);
++                    }
++                }
++            }
++            if (relay_reap_out_cq(pr) > 0) didwork = 1;   // reap send completions; reposts forwards' recvs
++            if (relay_fwd_flush(pr) > 0)   didwork = 1;   // post queued forwards into freed SQ slots
++        }
++        // Tight busy-poll while traffic flows (minimizes the relay-hop latency that bottlenecks the
++        // latency-bound tree allreduce); back off only when fully idle so we don't peg a core.
++        if (!didwork) usleep(2);
++    }
++    return NULL;
++}
++
++/* Stand up the overlay: fixed-port listener + acceptor thread, then dial both
++ * neighbors, then per-leg buffers + posted recvs + start the pump. Returns 0 ok. */
++static int relay_overlay_init(void) {
++    int me = relay_ring_detect_rank();
++    if (me < 0) { RELAY_LOG("OVERLAY: no rank detected; skip"); return -1; }
++    memset(g_relay_legs, 0, sizeof(g_relay_legs));
++
++    int s = socket(AF_INET, SOCK_STREAM, 0);
++    if (s < 0) { RELAY_LOG("OVERLAY: socket: %s", strerror(errno)); return -1; }
++    int opt = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
++    struct timeval tv; tv.tv_sec = 60; tv.tv_usec = 0;          /* bound the acceptor wait */
++    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++    struct sockaddr_in a; memset(&a, 0, sizeof(a));
++    a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_ANY); a.sin_port = htons(RELAY_OVERLAY_PORT);
++    if (bind(s, (struct sockaddr *)&a, sizeof(a)) < 0) {
++        RELAY_LOG("OVERLAY: bind :%d failed: %s", RELAY_OVERLAY_PORT, strerror(errno)); close(s); return -1;
++    }
++    listen(s, 16);
++    g_relay_listen_sock = s;
++    if (pthread_create(&g_relay_acceptor_thread, NULL, relay_overlay_acceptor, NULL) != 0) {
++        RELAY_LOG("OVERLAY: acceptor thread create failed"); close(s); return -1;
++    }
++    RELAY_LOG("OVERLAY: rank%d listening on :%d, dialing 2 neighbors", me, RELAY_OVERLAY_PORT);
++
++    /* Dial both out-legs, retrying; a peer's listener may not be bound yet. */
++    for (int i = 0; i < 2; i++) {
++        const struct relay_leg_addr *L = &k_legs[me][i];
++        uint32_t lip = 0, pip = 0;
++        inet_pton(AF_INET, L->local_ip, &lip);
++        inet_pton(AF_INET, L->peer_ip, &pip);
++        for (int att = 0; att < 45 && !g_relay_legs[L->peer_rank].out_up; att++) {
++            if (relay_overlay_dial(ntohl(lip), ntohl(pip), L->peer_rank) == 0) break;
++            sleep(1);
++        }
++        if (!g_relay_legs[L->peer_rank].out_up)
++            RELAY_LOG("OVERLAY: out-leg to rank%d NEVER came up; relay will be incomplete", L->peer_rank);
++    }
++
++    pthread_join(g_relay_acceptor_thread, NULL);
++    RELAY_LOG("OVERLAY: rank%d ready; out[rank%d=%d rank%d=%d] in[rank%d=%d rank%d=%d]",
++              me,
++              k_legs[me][0].peer_rank, g_relay_legs[k_legs[me][0].peer_rank].out_up,
++              k_legs[me][1].peer_rank, g_relay_legs[k_legs[me][1].peer_rank].out_up,
++              k_legs[me][0].peer_rank, g_relay_legs[k_legs[me][0].peer_rank].in_up,
++              k_legs[me][1].peer_rank, g_relay_legs[k_legs[me][1].peer_rank].in_up);
++
++    /* per-leg buffers + posted recvs, then start the forward pump */
++    memset(g_relay_legbufs, 0, sizeof(g_relay_legbufs));
++    for (int i = 0; i < RELAY_RING_N; i++) pthread_mutex_init(&g_relay_send_mtx[i], NULL);
++    for (int i = 0; i < 2; i++) {
++        int pr = k_legs[me][i].peer_rank;
++        if (relay_leg_alloc_bufs(pr) == 0) {
++            int posted = 0;
++            for (int j = 0; j < RELAY_NBUF; j++)
++                if (relay_leg_post_recv(pr, j) == 0) posted++;
++            RELAY_LOG("RELAY: leg rank%d buffers up, %d/%d recvs posted", pr, posted, RELAY_NBUF);
++        }
++    }
++    // Zero-copy forward: register each leg's recv_slab on the OTHER leg's PD, so the intermediate
++    // can RDMA-send a received chunk straight out the other leg with no memcpy.
++    {
++        int a = k_legs[me][0].peer_rank, b = k_legs[me][1].peer_rank;
++        size_t sz = (size_t)RELAY_BUF_SZ * RELAY_NBUF;
++        if (g_relay_legbufs[a].recv_slab && g_relay_legs[b].nic) {
++            g_relay_legbufs[a].fwd_mr = ibv_reg_mr(g_relay_legs[b].nic->pd, g_relay_legbufs[a].recv_slab, sz, IBV_ACCESS_LOCAL_WRITE);
++            g_relay_legbufs[a].fwd_out_neighbor = b;
++        }
++        if (g_relay_legbufs[b].recv_slab && g_relay_legs[a].nic) {
++            g_relay_legbufs[b].fwd_mr = ibv_reg_mr(g_relay_legs[a].nic->pd, g_relay_legbufs[b].recv_slab, sz, IBV_ACCESS_LOCAL_WRITE);
++            g_relay_legbufs[b].fwd_out_neighbor = a;
++        }
++        RELAY_LOG("RELAY: zero-copy fwd MRs: leg%d->out%d %s, leg%d->out%d %s", a, b,
++                  g_relay_legbufs[a].fwd_mr ? "ok" : "FAIL", b, a, g_relay_legbufs[b].fwd_mr ? "ok" : "FAIL");
++    }
++    g_relay_pump_run = 1;
++    pthread_create(&g_relay_pump_thread, NULL, relay_pump, NULL);
++    g_relay_up = 1;
++    if (getenv("NCCL_RELAY_BENCH") && me == 0) {
++        pthread_t bt; pthread_create(&bt, NULL, relay_bench_sender, NULL); pthread_detach(bt);
++    }
++    return 0;
++}
++
++/* ============================================================================
++ * EXPOSED API (extern "C"; declared in relay.h)
++ * ========================================================================== */
++
++extern "C" int relay_init(void) {
++    static int initialized = 0;
++    if (initialized) return g_relay_up ? 0 : -1;
++    initialized = 1;
++
++    if (relay_discover_nics() != 0) return -1;
++    int me = relay_ring_detect_rank();
++    if (me < 0) return -1;                       /* not a known relay node */
++
++    if (!getenv("NCCL_RELAY_ENABLE")) {
++        RELAY_LOG("relay: rank%d detected but NCCL_RELAY_ENABLE unset; overlay off", me);
++        return -1;                                /* opt-in: net_ib behaves normally */
++    }
++    return relay_overlay_init();                  /* sets g_relay_up on success */
++}
++
++extern "C" int relay_active(void) { return g_relay_up; }
++
++extern "C" int relay_my_rank(void) { return g_relay_my_rank; }
++
++extern "C" int relay_rank_of_ip(uint32_t ip_net) { return relay_ring_rank_of_ip(ip_net); }
++
++extern "C" int relay_next_hop(int my_rank, int dst_rank) { return relay_ring_next_hop(my_rank, dst_rank); }
++
++extern "C" uint32_t relay_new_conn_id(void) {
++    return __atomic_add_fetch(&g_relay_conn_seq, 1, __ATOMIC_RELAXED);
++}
++
++/* NCCL diagonal isend: build a relay header + payload contiguously, post toward
++ * the next hop. Store-and-forward: once this returns, the caller's buffer is free. */
++extern "C" int relay_send_msg(int dst_rank, uint32_t conn_id, const void *data, uint32_t len) {
++    int me = g_relay_my_rank;
++    if (dst_rank < 0 || dst_rank >= RELAY_RING_N) { RELAY_LOG("RELAY send: dst %d OOR", dst_rank); return -1; }
++    int nh = relay_ring_next_hop(me, dst_rank);
++    int outn = (nh < 0) ? dst_rank : nh;
++    if (outn < 0 || outn >= RELAY_RING_N) { RELAY_LOG("RELAY send: outn %d OOR", outn); return -1; }
++    struct relay_leg_bufs *b = &g_relay_legbufs[outn];
++    if (!b->send_mr || !g_relay_legs[outn].out_up) { RELAY_LOG("RELAY send: no out leg to rank%d", outn); return -1; }
++    uint32_t tot = (uint32_t)sizeof(struct relay_hdr) + len;
++    if (tot > RELAY_BUF_SZ) { RELAY_LOG("RELAY send: pkt %u > buf %d (need chunking)", tot, RELAY_BUF_SZ); return -1; }
++    pthread_mutex_lock(&g_relay_send_mtx[outn]);
++    // Flow control: don't reuse a send-slab buffer whose previous send is still in flight (the NIC
++    // would transmit overwritten bytes -> wrong conn_id). Wait for the pump to reap completions
++    // (advances g_send_done). We are NOT the pump thread, so we wait via usleep, not inline reap.
++    for (int spins = 0;
++         (g_send_posted[outn] - __atomic_load_n(&g_send_done[outn], __ATOMIC_RELAXED)) >= RELAY_NBUF && spins < 5000000;
++         spins++) {
++        pthread_mutex_unlock(&g_relay_send_mtx[outn]);
++        usleep(2);
++        pthread_mutex_lock(&g_relay_send_mtx[outn]);
++    }
++    int idx = (int)(g_send_posted[outn] % RELAY_NBUF);
++    char *buf = b->send_slab + (size_t)idx * RELAY_BUF_SZ;
++    struct relay_hdr *h = (struct relay_hdr *)buf;
++    h->magic = RELAY_HDR_MAGIC; h->src_rank = me; h->dst_rank = dst_rank;
++    h->conn_id = conn_id; h->seq = 0; h->len = len;
++    if (len) memcpy(buf + sizeof(*h), data, len);
++    struct ibv_sge sge; memset(&sge, 0, sizeof(sge));
++    sge.addr = (uintptr_t)buf; sge.length = tot; sge.lkey = b->send_mr->lkey;
++    struct ibv_send_wr wr, *bad; memset(&wr, 0, sizeof(wr));
++    wr.wr_id = 0x5e4d; wr.sg_list = &sge; wr.num_sge = 1;
++    wr.opcode = IBV_WR_SEND; wr.send_flags = IBV_SEND_SIGNALED;
++    int rc = ibv_post_send(g_relay_legs[outn].out_qp, &wr, &bad);
++    // SQ full: never return ENOMEM to NCCL (it would surface as a failed isend / hang). Drop the
++    // lock so the pump can reap out_cq and drain the hop, then retry the same prepared WR.
++    for (int spins = 0; rc == ENOMEM && spins < 5000000; spins++) {
++        pthread_mutex_unlock(&g_relay_send_mtx[outn]);
++        usleep(2);
++        pthread_mutex_lock(&g_relay_send_mtx[outn]);
++        rc = ibv_post_send(g_relay_legs[outn].out_qp, &wr, &bad);
++    }
++    if (rc == 0) {
++        g_send_posted[outn]++;   // claim the slab slot only on a successful post (in-flight until reaped)
++        __atomic_fetch_add(&g_leg_tx[outn], 1, __ATOMIC_RELAXED);
++        if (conn_id < RELAY_MAXCONN) __atomic_fetch_add(&g_src_sent[conn_id], 1, __ATOMIC_RELAXED);
++    }
++    pthread_mutex_unlock(&g_relay_send_mtx[outn]);
++    return rc;
++}
++
++extern "C" void relay_register_rconn(int src_rank, uint32_t conn_id) {
++    pthread_mutex_lock(&g_relay_rconn_mtx);
++    if (!rconn_find(src_rank, conn_id)) {
++        for (int i = 0; i < RELAY_RCONN_MAX; i++) if (!g_relay_rconns[i].in_use) {
++            memset(&g_relay_rconns[i], 0, sizeof(g_relay_rconns[i]));
++            g_relay_rconns[i].in_use = 1; g_relay_rconns[i].src_rank = src_rank; g_relay_rconns[i].conn_id = conn_id;
++            break;
++        }
++    }
++    pthread_mutex_unlock(&g_relay_rconn_mtx);
++}
++
++extern "C" int relay_post_recv_req(int src_rank, uint32_t conn_id, void *buf, uint32_t max,
++                                   int *done_flag, int *size_out, int *remaining) {
++    pthread_mutex_lock(&g_relay_rconn_mtx);
++    struct relay_rconn *rc = rconn_find(src_rank, conn_id);
++    if (!rc) {  /* connect/accept races irecv; register lazily */
++        for (int i = 0; i < RELAY_RCONN_MAX; i++) if (!g_relay_rconns[i].in_use) {
++            memset(&g_relay_rconns[i], 0, sizeof(g_relay_rconns[i]));
++            g_relay_rconns[i].in_use = 1; g_relay_rconns[i].src_rank = src_rank; g_relay_rconns[i].conn_id = conn_id;
++            rc = &g_relay_rconns[i]; break;
++        }
++    }
++    if (!rc) { pthread_mutex_unlock(&g_relay_rconn_mtx); return -1; }
++    int nt = (rc->pend_t + 1) % RELAY_RCONN_QD;
++    if (nt == rc->pend_h) { pthread_mutex_unlock(&g_relay_rconn_mtx); RELAY_LOG("RELAY: pend queue full src=%d conn=%u", src_rank, conn_id); return -1; }
++    rc->pend[rc->pend_t].buf = buf;
++    rc->pend[rc->pend_t].max = max;
++    rc->pend[rc->pend_t].done_flag = done_flag;
++    rc->pend[rc->pend_t].size_out = size_out;
++    rc->pend[rc->pend_t].remaining = remaining;
++    rc->pend_t = nt;
++    rconn_try_match(rc);
++    pthread_mutex_unlock(&g_relay_rconn_mtx);
++    return 0;
++}
+diff --git a/src/transport/net_ib/relay.h b/src/transport/net_ib/relay.h
+new file mode 100644
+index 00000000..c248f134
+--- /dev/null
++++ b/src/transport/net_ib/relay.h
+@@ -0,0 +1,70 @@
++/*
++ * relay.h; self-contained 2-hop RoCE relay overlay for a switchless 4-Spark ring.
++ *
++ * Self-contained: every symbol is prefixed `relay_` / `g_relay_` so this object
++ * links into NVIDIA NCCL's net_ib transport with no symbol clash and no external
++ * globals.
++ *
++ * Depends ONLY on: libibverbs (<infiniband/verbs.h>), pthreads, and standard
++ * POSIX/C headers (sockets, stdio, string, stdlib, arpa/inet, ifaddrs).
++ *
++ * Physical ring (each link = 2 bonded /30 RoCE subnets), node-rank = --node-rank:
++ *   rank0 spark-2  rocep1s0f0=10.42.0.1  (f0->rank1, f1=10.42.6.2->rank3)
++ *   rank1 spark-1  rocep1s0f0=10.42.2.1  (f0->rank2, f1=10.42.0.2->rank0)
++ *   rank2 spark-3  rocep1s0f0=10.42.4.1  (f0->rank3, f1=10.42.2.2->rank1)
++ *   rank3 spark-4  rocep1s0f0=10.42.6.1  (f0->rank0, f1=10.42.4.2->rank2)
++ * Ring: 0-1-2-3-0. Adjacent pairs cabled; diagonals 0<->2 and 1<->3 relay 2-hop.
++ */
++#ifndef NCCL_NET_IB_RELAY_H
++#define NCCL_NET_IB_RELAY_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Discover NICs, detect our rank, stand up overlay+legs+pump. Returns 0 on
++ * success, -1 if this is not a known relay node (then net_ib behaves normally).
++ * The overlay only runs if NCCL_RELAY_ENABLE is set in the environment.
++ * Idempotent; safe to call more than once (initializes at most once). */
++int relay_init(void);
++
++/* 1 if the overlay/legs are up, 0 otherwise. */
++int relay_active(void);
++
++/* Our rank on the ring, or -1 if not detected. */
++int relay_my_rank(void);
++
++/* Peer rank from a RoCE IP (network byte order), or -1 if unknown. */
++int relay_rank_of_ip(uint32_t ip_net);
++
++/* Intermediate rank for a diagonal route, or -1 if dst is self or adjacent. */
++int relay_next_hop(int my_rank, int dst_rank);
++
++/* Unique per-connection id (send side). */
++uint32_t relay_new_conn_id(void);
++
++/* Store-and-forward diagonal send. Builds a relay header + payload and posts it
++ * toward the next hop. Returns 0 once handed off (caller's buffer is then free). */
++int relay_send_msg(int dst_rank, uint32_t conn_id, const void *data, uint32_t len);
++
++/* Accept side: register that we expect data for (src_rank, conn_id). */
++void relay_register_rconn(int src_rank, uint32_t conn_id);
++
++/* irecv: register one pending recv buffer for (src_rank, conn_id). When the pump
++ * delivers a matching payload it copies into buf (clamped to max), decrements
++ * *remaining under the lock, sets *size_out to the bytes copied, and when
++ * *remaining reaches 0 sets *done_flag=1 (atomic release). For a single recv
++ * pass remaining pointing at an int initialized to 1; for a grouped recv of n
++ * sub-recvs, call this n times with the SAME done_flag and the SAME remaining
++ * (initialized to n) so the group completes when the last sub-recv lands.
++ * size_out may be a distinct int per sub-recv. Returns 0 ok, -1 on failure. */
++int relay_post_recv_req(int src_rank, uint32_t conn_id, void *buf, uint32_t max,
++                        int *done_flag, int *size_out, int *remaining);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* NCCL_NET_IB_RELAY_H */

@@ -1,0 +1,37 @@
+# TEMPLATE for scripts/mirror-private-terms.txt — the EXTRA site terms that
+# scripts/mirror-snapshot.sh must never find in the published snapshot.
+#
+# Copy to scripts/mirror-private-terms.txt (gitignored) and put your own terms there. The
+# real file is optional: without it the sanitizer still scrubs and checks everything it can
+# derive from cluster.env (node aliases, management IPs and their /24, the fabric /16, the
+# link-local range, the login name, *.ts.net names) — this file is for the terms that
+# appear NOWHERE in cluster.env and therefore cannot be derived.
+#
+# Format: one extended-regex per line, matched CASE-INSENSITIVELY against every text file
+# of the snapshot. Blank lines and lines starting with `#` are ignored. These terms are
+# NOT rewritten, only checked: a single occurrence fails the scan, so that the fix happens
+# in the source file rather than being silently papered over. The terms themselves are
+# never printed by the report — a hit is shown as `path:line` plus a masked excerpt.
+#
+# The dummy entries below are the CATEGORIES worth listing, with example values; replace
+# them, and delete the ones that do not apply.
+
+# The COMMON STEM of the node aliases, when they share one. The per-rank rewrite only knows
+# the exact aliases of NODES, so a generic form written in prose (`nodeN`, `node<N>`,
+# `node*`) survives it; listing the stem here is what catches those.
+gx10-
+
+# The workstation's own host name (it shows up in shell prompts, paths and pasted output)
+my-workstation
+
+# The tailnet / MagicDNS name, on its own as well as inside a *.ts.net name
+example-tailnet
+
+# City, site or rack name used in notes and bench write-ups
+springfield
+
+# Any second login name that is not the one in RELAY_DEST
+bob
+
+# A personal domain quoted in e-mail addresses or URLs
+example-domain\.test

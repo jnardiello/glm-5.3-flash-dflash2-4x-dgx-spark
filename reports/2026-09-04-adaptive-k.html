@@ -1,0 +1,223 @@
+<title>Adaptive Draft Length</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F4F5F2; --surface: #FFFFFF; --ink: #1B1F1D; --muted: #5C645F; --line: #D8DDD9;
+    --accent: #2F6F5E; --accent-soft: #E3EEE9; --good: #2A7A4B; --good-soft: #E1F0E6; --warn: #A85A2B; --warn-soft: #F5E7DE;
+    --display: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #131614; --surface: #1B1F1D; --ink: #E9ECE9; --muted: #A2ABA5; --line: #2E3531;
+      --accent: #6FB79F; --accent-soft: #1E3A31; --good: #6CC48E; --good-soft: #17352A; --warn: #DB9A6D; --warn-soft: #3C2617;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #131614; --surface: #1B1F1D; --ink: #E9ECE9; --muted: #A2ABA5; --line: #2E3531;
+    --accent: #6FB79F; --accent-soft: #1E3A31; --good: #6CC48E; --good-soft: #17352A; --warn: #DB9A6D; --warn-soft: #3C2617;
+  }
+  body { background: var(--ground); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.55; margin: 0; }
+  main { max-width: 900px; margin: 0 auto; padding: 40px 24px 72px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  h1 { font-family: var(--display); font-weight: 700; font-size: 40px; line-height: 1.08; margin: 0 0 14px; text-wrap: balance; }
+  .lead { font-size: 18px; color: var(--muted); max-width: 66ch; margin: 0 0 26px; }
+  h2 { font-family: var(--display); font-weight: 600; font-size: 25px; margin: 40px 0 12px; text-wrap: balance; }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 18px; margin: 18px 0 6px; }
+  p { max-width: 70ch; margin: 0 0 12px; }
+  .decision { background: var(--surface); border-left: 4px solid var(--accent); padding: 14px 18px; margin: 0 0 8px; }
+  .decision b { font-family: var(--display); font-size: 18px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid3 div { background: var(--surface); border: 1px solid var(--line); padding: 12px 14px; font-size: 14.5px; }
+  .grid3 b { display: block; font-family: var(--display); font-size: 16px; margin-bottom: 4px; }
+  .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.pick td { background: var(--accent-soft); font-weight: 500; }
+  tr.base td { color: var(--muted); }
+  tr:last-child td { border-bottom: none; }
+  .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; display: inline-block; }
+  .tag.good { color: var(--good); background: var(--good-soft); }
+  .tag.warn { color: var(--warn); background: var(--warn-soft); }
+  code { font-family: var(--mono); font-size: 13px; background: var(--accent-soft); padding: 1px 5px; }
+  ul { margin: 0 0 12px; padding-left: 20px; max-width: 74ch; }
+  li { margin-bottom: 5px; }
+  .note { font-size: 13.5px; color: var(--muted); max-width: 80ch; margin-top: 8px; }
+  footer { margin-top: 44px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .decision > b { display: block; margin-bottom: 6px; }
+  .decision p, .decision ul { max-width: none; }
+  .decision ul { margin: 8px 0 0; }
+  .decision p:last-child, .decision ul:last-child { margin-bottom: 0; }
+  @media (max-width: 720px) { .grid3 { grid-template-columns: 1fr; } h1 { font-size: 32px; } }
+</style>
+
+<main>
+  <div class="eyebrow">4× ASUS GX10 (GB10) · vLLM TP4 · GLM-5.3-Flash FP8 · DFlash2 speculative decoding · 4 September 2026</div>
+  <h1>Adaptive draft length: letting each request pick its own speculation depth</h1>
+  <p class="lead">Speculative decoding drafts k tokens per step and keeps the ones the model accepts. A fixed k=5 made structured and parallel workloads up to 50% faster but slowed prose by 10–19%. A 400-line scheduler patch now chooses k per request from its own acceptance history. Five threshold sets were measured in one day; this is what they gave, which one went to production, and what it costs.</p>
+
+  <div class="decision">
+    <b>Decision — v1 promoted, 4 September 2026, 12:05.</b>
+    <p>Production moves from fixed k=3 to adaptive k ∈ {3, 5}, variant <b>v1</b>: optimistic start at 5,
+    band 0.42 / 0.58, alpha 0.15, position-3 signal, per request. Structured decode +19%, sustained
+    decode +10%, four parallel streams +40% (201 mean, 225 on the fast waves), code +4%, at a prose cost
+    of 6% single stream and 15–20% on long-context essay decode at one size. The table below recommended
+    the safer v2; the owner chose v1 for three reasons.</p>
+    <ul>
+      <li><b>The usage mix decides.</b> About 50% parallel sub-agents driven by a third main model, 30% agentic coding with this stack as the primary model, 20% prose. Four-stream throughput and code decode therefore dominate the weighted cost, and they are what the optimistic start buys: 201 against 144 at k=3 and 170–177 in the arms that start at 3.</li>
+      <li><b>The prose cost is imperceptible.</b> 40.2 against 42.9 tok/s by hand — about 41 instead of about 43 tokens per second is not visible to a reader at this speed. The same −4..−6% appears in all ten passes of all five arms, so protecting prose removes no residual and costs the whole concurrency gain.</li>
+      <li><b>Batch-uniform rejected.</b> v4 and v5 give the whole batch one draft length: with concurrent heterogeneous requests the slowest stream governs k for everyone. Per-request mode lets each request keep its own, which is what a mixed sub-agent load is.</li>
+    </ul>
+  </div>
+  <p class="note">Costs accepted and recorded in the commit: prose −6% single stream, long-context essay
+  decode −15..−20% on one size (100k 35.1 and 200k 36.2 against 43.8 / 42.5 at k=3), full decode CUDA
+  graphs lost on mixed-k steps, prefill unchanged. Rollback in one step: <code>SPEC_TOKENS=3</code>,
+  <code>SPEC_EXTRA_JSON=""</code>, drop <code>--scheduler-cls</code>, drop the <code>/opt/tp4</code>
+  mount and the <code>VLLM_ADAPTIVE_K_*</code> variables.</p>
+
+  <h2>Why a fixed k could not be promoted</h2>
+  <p>The night sweep of k=3/4/5/7 with per-workload acceptance counters explained the trade. Structured output accepts 0.90–0.95 of drafted tokens at any k, prose only 0.32–0.47 above k=3. At small batch the MoE cost grows with the number of distinct experts the verify tokens touch, so a 6-token verify step costs about 20–25% more than a 4-token one. Where acceptance is high the extra tokens pay for it many times over; on prose they do not.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Fixed k</th><th class="num">Structured ×1</th><th class="num">Prose ×1</th><th class="num">Code ×1</th><th class="num">4 streams</th><th class="num">Sustained 1400</th><th>Acceptance struct / code / prose</th></tr></thead>
+      <tbody>
+        <tr class="base"><td>k=3 (production)</td><td class="num">57.6</td><td class="num">41.4</td><td class="num">48.4</td><td class="num">144</td><td class="num">53.4</td><td>0.94 / 0.69–0.77 / 0.56–0.67</td></tr>
+        <tr><td>k=4</td><td class="num">62.8</td><td class="num">36.9</td><td class="num">46.3</td><td class="num">169</td><td class="num">59.6</td><td>0.95 / 0.66 / 0.47</td></tr>
+        <tr><td>k=5</td><td class="num">68.0</td><td class="num">34.4</td><td class="num">51.9</td><td class="num">224</td><td class="num">60.2</td><td>0.95 / 0.68 / 0.38–0.45</td></tr>
+        <tr><td>k=7</td><td class="num">87.0</td><td class="num">36.4</td><td class="num">52.1</td><td class="num">197</td><td class="num">75.2</td><td>0.90 / 0.51 / 0.32</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">tok/s, single stream unless noted, 200-token answers at temperature 0 with thinking off, medians of 3 runs; four streams is the aggregate of four concurrent structured requests. Production k=3 is the mean of three boots.</p>
+
+  <h2>How the patch works</h2>
+  <div class="grid3">
+    <div><b>Where the decision lives</b>In vLLM's scheduler, not in the drafter. The drafter always drafts 5 tokens; the scheduler sets, per request, how many of them the next step verifies. The scheduler runs in one process and broadcasts its output to the four tensor-parallel ranks, so the decision is consistent by construction.</div>
+    <div><b>How it is installed</b>A subclass of vLLM's <code>AsyncScheduler</code> selected with <code>--scheduler-cls</code>, bind-mounted from the repo and versioned like every other change. No file of the container image is replaced, so it survives image upgrades. One rollback line in <code>cluster.env</code>.</div>
+    <div><b>The signal</b>Per request, an exponential moving average of "were the first three drafted tokens all accepted" (the third position: prose 0.39–0.48, code 0.56–0.65, structured 0.89). With hysteresis it switches k in about six steps. A dynamic-speculation table keeps full CUDA graphs captured for both verify sizes.</div>
+  </div>
+
+  <h2>Five threshold sets, same patch</h2>
+  <p>Each variant changes only environment variables: where a request starts (k=5 optimistic, or k=3 and earn it), how wide the band is, and whether k is chosen per request or once per step for the whole batch. Every variant ran two full passes plus a long-context pass on an idle endpoint, verified against the engine's scheduler log.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Variant</th><th>Start · band · mode</th><th class="num">Struct ×1</th><th class="num">Prose ×1</th><th class="num">Code ×1</th><th class="num">4 streams</th><th class="num">Sustained</th><th class="num">Long ctx 100k / 200k</th></tr></thead>
+      <tbody>
+        <tr class="base"><td>k=3 production</td><td>fixed</td><td class="num">57.6</td><td class="num">42.9</td><td class="num">48.4</td><td class="num">144</td><td class="num">53.4</td><td class="num">43.8 / 42.5</td></tr>
+        <tr class="base"><td>k=5 fixed</td><td>fixed</td><td class="num">68.0</td><td class="num">38.5</td><td class="num">51.9</td><td class="num">224</td><td class="num">60.2</td><td class="num">—</td></tr>
+        <tr class="pick"><td>v1 <span class="tag good">promoted</span></td><td>5 · 0.42/0.58 · per request</td><td class="num">68.6</td><td class="num">40.2</td><td class="num">50.5</td><td class="num">201</td><td class="num">58.9</td><td class="num">35.1 / 36.2</td></tr>
+        <tr><td>v2</td><td>3 · 0.50/0.60 · per request</td><td class="num">65.8</td><td class="num">41.0</td><td class="num">49.3</td><td class="num">170</td><td class="num">59.7</td><td class="num">39.5 / 39.6</td></tr>
+        <tr><td>v3</td><td>5 · 0.50/0.60 · per request</td><td class="num">67.8</td><td class="num">41.2</td><td class="num">49.4</td><td class="num">176 (207 on the clean pass)</td><td class="num">60.7</td><td class="num">36.0 / 42.6</td></tr>
+        <tr><td>v4</td><td>3 · 0.50/0.60 · per step</td><td class="num">65.2</td><td class="num">40.7</td><td class="num">47.7</td><td class="num">177</td><td class="num">60.5</td><td class="num">41.9 / 38.2</td></tr>
+        <tr><td>v5</td><td>5 · 0.50/0.60 · per step</td><td class="num">68.8</td><td class="num">39.4</td><td class="num">50.2</td><td class="num">203</td><td class="num">60.0</td><td class="num">39.9 / 34.9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Means over the two passes; prose is the hand-run three-run median (the harness value sits within a point). Long context is the decode rate after a 100k- or 200k-token prompt, with a prose-like essay as the answer. Prefill was flat in every variant (2100–2200 tok/s). Boot-to-boot variance on single-stream decode is about ±5%, measured on three production boots; four-stream waves at any k ≥ 5 alternate between roughly 175 and 225 tok/s even with a fixed k, so that column is read on its fast waves.</p>
+
+<!-- confirmation:begin -->
+  <h2>Confirmation on the promoted recipe</h2>
+  <p>Every v1 figure above is the <b>overlay boot of 08:31</b>, the arm as it was measured before
+  promotion. The confirmation pass ran the same afternoon on the plain <code>cluster.env</code>: the
+  owner rebooted the four nodes by hand, autostart brought the endpoint back up — <code>/health</code>
+  200 at 13:18:01, sanity gate answer <code>Rome</code> and tool call <span class="tag good">pass</span>
+  inside the two-minute window, all four boot signature lines present in the rank-0 log — then two
+  <code>run_ab.sh</code> passes at 13:19 and 13:25 with <code>LONG_DECODE=1</code>, code and prose ×3 by
+  hand after each, <code>bench_longctx.py</code> at 100k and 200k and the 250k needle. The engine's
+  in-flight counter was 0.0 before every phase; GPU sensors 66–74 °C, 2405–2509 MHz, no throttle flag.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Metric (tok/s)</th><th class="num">k=3 + hybrid MoE (previous prod)</th><th class="num">Pass 1</th><th class="num">Pass 2</th><th class="num">Mean</th><th class="num">Delta</th></tr></thead>
+      <tbody>
+        <tr class="pick"><td>Decode structured ×1</td><td class="num">58.5</td><td class="num">71.4</td><td class="num">70.6</td><td class="num">71.0</td><td class="num">+21.4%</td></tr>
+        <tr><td>Decode prose ×1 (harness)</td><td class="num">42.7</td><td class="num">40.3</td><td class="num">40.4</td><td class="num">40.3</td><td class="num">−5.7%</td></tr>
+        <tr><td>Decode prose ×1 (by hand, ×3)</td><td class="num">42.6</td><td class="num">42.0</td><td class="num">43.3</td><td class="num">42.7</td><td class="num">+0.3%</td></tr>
+        <tr><td>Decode code ×1 (by hand, ×3)</td><td class="num">48.3</td><td class="num">50.7</td><td class="num">51.6</td><td class="num">51.1</td><td class="num">+6.0%</td></tr>
+        <tr class="pick"><td>4 streams, aggregate</td><td class="num">146.0</td><td class="num">239.5</td><td class="num">217.4</td><td class="num">228.5</td><td class="num">+56.5%</td></tr>
+        <tr><td>4 streams, per stream</td><td class="num">39.0</td><td class="num">59.9</td><td class="num">54.4</td><td class="num">57.1</td><td class="num">+46.5%</td></tr>
+        <tr><td>Sustained @1400</td><td class="num">54.4</td><td class="num">63.0</td><td class="num">63.7</td><td class="num">63.4</td><td class="num">+16.6%</td></tr>
+        <tr><td>Prefill 30k</td><td class="num">2126.9</td><td class="num">2187.5</td><td class="num">2192.0</td><td class="num">2189.7</td><td class="num">+3.0%</td></tr>
+        <tr><td>Prefill 100k</td><td class="num">2177.5</td><td class="num">2208.5</td><td class="num">2210.2</td><td class="num">2209.3</td><td class="num">+1.5%</td></tr>
+        <tr class="base"><td>Needle 30k / 100k · tool call</td><td class="num">3/3 · 2/2 · PASS</td><td class="num">3/3 · 2/2</td><td class="num">3/3 · 2/2</td><td class="num">PASS</td><td class="num">=</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Means of the two per-pass medians, the delta against the k=3 + hybrid-MoE recipe this
+  one replaced. Regenerate with <code>python3 scripts/bench/perf-table.py --delta moe-hybrid
+  prod-2026-09-04-adaptive-k --md</code>. Acceptance per phase, from the <code>/metrics</code> deltas
+  snapshotted around each phase: structured 0.94 (4.72 accepted of 5), four streams 0.95 (4.73),
+  sustained @1400 0.86 (4.03), code 0.67 (2.99), prose by hand 0.52 (1.93), prose harness 0.50 (1.86) —
+  the split the policy was built to produce.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Long context</th><th class="num">Prefill tok/s</th><th class="num">Decode after the prompt · v1</th><th class="num">Same on k=3</th><th class="num">Delta</th><th class="num">Cached follow-up TTFT</th><th class="num">Needle</th></tr></thead>
+      <tbody>
+        <tr><td>100k</td><td class="num">2205</td><td class="num">37.5</td><td class="num">43.8</td><td class="num">−14%</td><td class="num">2.05 s</td><td class="num">2/2</td></tr>
+        <tr><td>200k</td><td class="num">2172</td><td class="num">39.2</td><td class="num">42.5</td><td class="num">−8%</td><td class="num">2.82 s</td><td class="num">2/2</td></tr>
+        <tr><td>250k</td><td class="num">2142</td><td class="num">38.4</td><td class="num">39.7</td><td class="num">−3%</td><td class="num">2.73 s</td><td class="num">1/1</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Two runs per size at 100k and 200k, one at 250k, after a discarded sizing warm-up;
+  the k=3 column is <code>bench-results/2026-09-04-long-context.md</code>. This is the accepted cost of
+  the optimistic seed, and it is smaller here than on the overlay boot (which read 35.1 / 36.2), but it
+  is still the only axis where the policy loses beyond the noise band. <b>Read the pass as "the promoted
+  recipe reproduces the overlay result", not as a further gain over it:</b> against the 08:31 overlay of
+  the same recipe this boot read structured 68.6 → 71.0, code 50.5 → 51.1 and @1400 58.9 → 63.4, which
+  is the ±5% boot-to-boot band on single stream, while the c4 aggregate (200.7 → 228.5) sits above it
+  because the four-stream wave is bimodal at k ≥ 5. These numbers are now the baseline block of
+  <code>docs/gate.md</code> and the <code>BASE_*</code> values of <code>scripts/bench/run_ab.sh</code>.</p>
+<!-- confirmation:end -->
+
+  <h2>What the variants say</h2>
+  <ul>
+    <li><b>All five capture the structured and sustained gains</b> (+13–19% and +10–14%) and keep prefill unchanged. Code moves within noise (+2–4% for the optimistic starts).</li>
+    <li><b>Prose pays 4–6% in chat in every variant.</b> The residual is structural: the drafter now evaluates six positions per step, and a request's first steps run at k=5 before the average settles. That gap is below what a reader notices at 40 tokens per second.</li>
+    <li><b>Long-context prose is where thresholds matter.</b> Starting at k=3 (v2, v4) keeps it within 10% of production; starting at k=5 loses 15–18% on one of the two sizes. For this cluster's usage mix that cost was accepted in exchange for the concurrency of the optimistic start.</li>
+    <li><b>Per request beats per step</b> for mixed parallel work: in per-step mode the slowest stream governs all four.</li>
+    <li><b>A closed side question.</b> The bimodal four-stream waves were suspected to be mixed-k batches falling back to piecewise CUDA graphs. Fixed k=5 shows the same 177/224/224 pattern, so it is a property of k ≥ 5 at four streams, not of the policy.</li>
+  </ul>
+
+  <h2>Method, in short</h2>
+  <p>Idle-endpoint gate before every pass (the engine's in-flight request counter must be zero, and the scheduler log is checked afterwards), correctness gate within two minutes of every boot, GPU temperature and clock snapshots around each pass (70–75 °C, 2405–2500 MHz, no throttle flag), acceptance read from the engine's own counters per phase. Two fresh-context code reviews against the image sources before the first boot; the first attempt disabled itself because it had subclassed the synchronous scheduler while this build runs the asynchronous one for DFlash2, and was rebased.</p>
+
+  <h2>Next</h2>
+  <ul>
+    <li><b>The prose residual.</b> −4..−6% by hand in every arm, so it is not a threshold effect: the
+    drafter now evaluates six query positions per step instead of four, and a request's first steps run
+    at k=5 before the average settles. The signal itself is marginal on prose — position 3 is accepted
+    0.39–0.48 of the time, which is where the band sits, so a prose request oscillates rather than
+    settling. Next measurement: <code>K_HI=3</code> on the same stack, drafter at 5 and verify at 3
+    everywhere, to separate the drafter and table cost from the policy cost.</li>
+    <li><b>Four-stream wave bimodality at k ≥ 5.</b> Waves alternate between roughly 175 and 220–233
+    tok/s with fixed k=5 as well as with every adaptive arm, and v5 — where the batch is never mixed —
+    shows it too, so piecewise CUDA graphs are not the cause. The slow wave is usually the first of a
+    phase, which points at a warm-up of the four-stream shape. Until one slow and one fast wave are
+    profiled side by side, no c4 median at k ≥ 5 should be read as a policy effect.</li>
+    <li><b>A <code>K_HI=4</code> tier.</b> The verify batch is k+1 tokens, so k=3 lands on the tuned M=4
+    entry of the GB10 MoE config while k=5 falls into the M=8 bucket. A k ∈ {3, 4} policy, or a tuner run
+    that adds M=6, is the cheapest way to test whether part of the prose cost is a kernel-tile artefact
+    rather than acceptance.</li>
+  </ul>
+  <p>After that, the second phase-3 target found by profiling: about 29% of a decode step is spent in
+  generic BF16 matrix kernels serving the layers the FP8 checkpoint leaves unquantized, a candidate for
+  an INT8 or FP8 small-batch path.</p>
+
+  <footer>Same harness as the tuning campaign report: 200-token decode at temperature 0, thinking off, medians of three runs, prefill as prompt tokens over time to first token with a needle check. Repository: <a href="https://github.com/jnardiello/tp4-glm53-fp8-gx10">github.com/jnardiello/tp4-glm53-fp8-gx10</a> (patch under <code>node/patches/</code>, overlays under <code>experiments/</code>, note and raw JSON under <code>bench-results/</code>).</footer>
+</main>
+
+<!--
+Traceability. Every figure on this page comes from
+bench-results/2026-09-04-adaptive-k.md (fixed-k table, five-arm comparison table, the 12:05 Decision
+section and its reasoning), bench-results/2026-09-04-night-windows.md (the k=3/4/5/7 sweep and the
++-5% boot-to-boot band) and docs/adaptive-k.md (mechanism, installation, rollback). Cross-checked
+against `python3 scripts/bench/perf-table.py --md` for the adaptive-k-v1 row.
+Everything between the confirmation:begin / confirmation:end markers comes from
+bench-results/2026-09-04-adaptive-k.md § Production confirmation (boot facts, per-pass columns,
+acceptance table, long-context rows) and docs/gate.md § Baseline 2026-09-04, cross-checked with
+`python3 scripts/bench/perf-table.py --delta moe-hybrid prod-2026-09-04-adaptive-k --md`. The
+markers are kept so the region can be regenerated if the baseline moves.
+-->

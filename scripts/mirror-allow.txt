@@ -1,0 +1,52 @@
+# Allow-list for scripts/mirror-snapshot.sh --scan.
+# One rule per line: <path-glob><TAB><extended regex matching the WHOLE hit>.
+# A hit is dropped only when the file matches the glob AND the matched text matches the
+# regex; everything else still fails the scan. Paths are relative to the snapshot root.
+# Keep this file short and justified: each rule is an exception to "zero private data".
+
+# Upstream NCCL switchless relay patch (josephdrose/nccl-spark-switchless, vendored as-is by
+# node/nccl/): the 10.42.x.y addresses are the UPSTREAM author's example relay network, they
+# describe no interface of this cluster and must stay in the patch or `git apply` breaks.
+node/nccl/*.patch	^10\.42\.[0-9]{1,3}\.[0-9]{1,3}$
+
+# Public commercial-licence contact of the DFlash2 drafter vendor, quoted in the licence note.
+cluster.env.example	^contact@inco\.ai$
+
+# The Ubuntu package version of the NVIDIA driver, quoted in the comment that explains why the
+# driver packages are NOT held. Its tail (the release/point/revision numbers after `-0ubuntu`)
+# has the shape of a dotted quad whose four parts all fit in a byte, but it is a version, not
+# an address. The rule matches that tail and nothing else in the file.
+node/bootstrap/versions.env	^0\.24\.04\.[0-9]{1,3}$
+
+# The version-comparison example in the `ver_ge` header comment of verify-node.sh: four numeric
+# parts of a Docker engine version, not an address. The rule stays literal so that any other
+# dotted quad appearing in that file still fails the scan.
+scripts/verify-node.sh	^29\.2\.1\.1$
+
+# The PUBLIC repository URL. It is public information and is quoted in the README, in the
+# install runbook and in the two HTML reports; the login-name scan matches it because the
+# account name is part of the path. The rule names no account: it forgives the github.com
+# <owner>/<repo> URL shape and nothing else, so any other occurrence of the login still fails.
+*	^(https?://)?github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._/#?=-]*)?$
+
+# RFC 5737 documentation addresses (TEST-NET-1), used as the DUMMY management addresses of
+# the .example templates. They are reserved for documentation, route nowhere and describe no
+# interface of this cluster; the templates have to reach the reader filled in, not blanked.
+cluster.env.example	^192\.0\.2\.1[1-4]$
+node/ssh-config.example	^192\.0\.2\.1[1-4]$
+node/tp4-autostart.service.example	^192\.0\.2\.1[1-4]$
+# Same addresses, quoted in the self-contained recipe guard of the two node-side scripts:
+# they are the values the guard REFUSES to start on, so they have to be literals there.
+tp4ctl	^192\.0\.2\.1[1-4]$
+launcher/launch-glm53-tp4.sh	^192\.0\.2\.1[1-4]$
+
+# The DUMMY fabric plan of the same templates: node N on ring link L carries the L-th /24 of
+# the documented private range, with L and N both in 1..4. It is the RECOMMENDED addressing
+# plan, published on purpose, and it is not this cluster's actual fabric map (whose third
+# octet is a multiple of ten); the sanitizer deliberately skips the range rewrite on these
+# two files so the plan survives.
+cluster.env.example	^10\.10\.[1-4]\.[1-4]$
+node/etc/40-cx7.yaml.example	^10\.10\.[1-4]\.[1-4]$
+
+# NOTE: no dotted-quad-shaped string may appear in the comments of this file either — the
+# snapshot carries it, and a rule is scoped to the file it forgives, not to this one.

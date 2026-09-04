@@ -1,0 +1,57 @@
+# Netplan for the two CX-7 fabric ports of one node — TEMPLATE, pre-filled with the
+# addresses of RANK 1 in the example plan (dummy data: replace them).
+#
+# One file per node: rank n installs its own copy as /etc/netplan/40-cx7.yaml. The four
+# nodes form a switchless ring: every ring link is a /24 of its own, shared by exactly the
+# two ports it connects, and every fabric port runs MTU 9000 (jumbo frames). The two
+# enP2p1s0f*np* ports are the second PCIe view of the same transceivers: MTU 9000, no
+# address.
+#
+# ADDRESSING PLAN (the one cluster.env.example ships in FABRIC_TARGETS): the address of
+# node N on ring link L is 10.10.<L>.<N>/24, with L = 1..4 walking the ring
+# rank0 -> rank1 -> rank2 -> rank3 -> rank0 and N = the rank number + 1.
+#
+#   rank 0   f0 10.10.1.1/24 (L1, towards rank 1)   f1 10.10.4.1/24 (L4, towards rank 3)
+#   rank 1   f0 10.10.1.2/24 (L1, towards rank 0)   f1 10.10.2.2/24 (L2, towards rank 2)
+#   rank 2   f0 10.10.3.3/24 (L3, towards rank 3)   f1 10.10.2.3/24 (L2, towards rank 1)
+#   rank 3   f0 10.10.3.4/24 (L3, towards rank 2)   f1 10.10.4.4/24 (L4, towards rank 0)
+#
+# The two addressed stanzas below are the only lines to change; leave MTU 9000 and
+# `optional: true` alone. Keep the file in sync with FABRIC_TARGETS in cluster.env.
+#
+# The real per-node files live in node/etc/<alias>/40-cx7.yaml, where <alias> is the entry
+# of NODES for that rank, and are gitignored: create one per node
+# (`mkdir -p node/etc/<alias>` + copy this file), then
+# `scripts/deploy-host.sh --host <alias>` pushes it to /etc/netplan/40-cx7.yaml
+# (0600 root:root, additive) and `scripts/bootstrap-node.sh <alias> --rank <n> --apply`
+# (phase 3) is what runs `netplan apply`. The alias must equal the node's `hostname -s`:
+# deploy-host.sh compares them and refuses to install one node's fabric addresses on
+# another. See docs/fabric.md for the cable list, the IP plan and the worked example.
+network:
+  version: 2
+  renderer: NetworkManager
+  ethernets:
+    enp1s0f0np0:
+      dhcp4: false
+      dhcp6: false
+      mtu: 9000
+      optional: true
+      addresses:
+        - 10.10.1.2/24
+    enp1s0f1np1:
+      dhcp4: false
+      dhcp6: false
+      mtu: 9000
+      optional: true
+      addresses:
+        - 10.10.2.2/24
+    enP2p1s0f0np0:
+      dhcp4: false
+      dhcp6: false
+      mtu: 9000
+      optional: true
+    enP2p1s0f1np1:
+      dhcp4: false
+      dhcp6: false
+      mtu: 9000
+      optional: true

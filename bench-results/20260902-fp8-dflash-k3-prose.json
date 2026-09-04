@@ -1,0 +1,97 @@
+{
+  "kind": "decode",
+  "label": "decode-prose",
+  "ts": 1788354321.1558652,
+  "url": "http://<MGMT_IP_RANK0>:8000/v1",
+  "model": "glm-5.3-flash",
+  "prompt_mode": "prose",
+  "temperature": 0,
+  "thinking": "off",
+  "max_tokens": 200,
+  "runs": 3,
+  "concurrency": 1,
+  "health_code": 200,
+  "runs_detail": [
+    {
+      "run": 0,
+      "per_stream": [
+        {
+          "idx": 0,
+          "tok_s": 34.26692159523754,
+          "ttft_s": 0.4162441249936819,
+          "decode_s": 5.80734979204135,
+          "completion_tokens": 200,
+          "prompt_tokens": 39,
+          "finish_reason": "length",
+          "nan": false
+        }
+      ],
+      "ok_streams": 1,
+      "tokens_total": 199,
+      "aggregate_window_s": 5.80734979204135,
+      "aggregate_tok_s": 34.26692159523754,
+      "length_finish": [
+        "length"
+      ]
+    },
+    {
+      "run": 1,
+      "per_stream": [
+        {
+          "idx": 0,
+          "tok_s": 37.785347611417514,
+          "ttft_s": 0.333302500017453,
+          "decode_s": 5.2665917499689385,
+          "completion_tokens": 200,
+          "prompt_tokens": 39,
+          "finish_reason": "length",
+          "nan": false
+        }
+      ],
+      "ok_streams": 1,
+      "tokens_total": 199,
+      "aggregate_window_s": 5.2665917499689385,
+      "aggregate_tok_s": 37.785347611417514,
+      "length_finish": [
+        "length"
+      ]
+    },
+    {
+      "run": 2,
+      "per_stream": [
+        {
+          "idx": 0,
+          "tok_s": 34.31904416093983,
+          "ttft_s": 0.39833516703220084,
+          "decode_s": 5.798529791994952,
+          "completion_tokens": 200,
+          "prompt_tokens": 39,
+          "finish_reason": "length",
+          "nan": false
+        }
+      ],
+      "ok_streams": 1,
+      "tokens_total": 199,
+      "aggregate_window_s": 5.798529791994952,
+      "aggregate_tok_s": 34.31904416093983,
+      "length_finish": [
+        "length"
+      ]
+    }
+  ],
+  "warmup": {
+    "tok_s": 40.66863614386975,
+    "ttft_s": 0.41932308400282636,
+    "completion_tokens": 32
+  },
+  "tok_s_median": 34.31904416093983,
+  "tok_s_min": 34.26692159523754,
+  "tok_s_max": 37.785347611417514,
+  "aggregate_tok_s_median": 34.31904416093983,
+  "ttft_median_s": 0.39833516703220084,
+  "completion_tokens_median": 200.0,
+  "failed_streams": 0,
+  "any_nan": false,
+  "stop_finish_streams": 0,
+  "length_finish_all_runs": true
+}

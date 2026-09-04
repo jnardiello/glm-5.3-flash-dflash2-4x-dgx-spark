@@ -1,0 +1,570 @@
+{
+  "kind": "ab-pass",
+  "label": "fp8",
+  "ts": 1788291117.75701,
+  "decode_structured": {
+    "kind": "decode",
+    "label": "decode-structured",
+    "ts": 1788290850.180616,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "structured",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 200,
+    "runs": 3,
+    "concurrency": 1,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 49.51307478778595,
+            "ttft_s": 0.45613599999342114,
+            "decode_s": 4.019140415999573,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 4.019140415999573,
+        "aggregate_tok_s": 49.51307478778595,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 48.88098118291804,
+            "ttft_s": 0.48631224999553524,
+            "decode_s": 4.071113042009529,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 4.071113042009529,
+        "aggregate_tok_s": 48.88098118291804,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 50.321200144657354,
+            "ttft_s": 0.3850491249759216,
+            "decode_s": 3.9545956660003867,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 3.9545956660003867,
+        "aggregate_tok_s": 50.321200144657354,
+        "length_finish": [
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 61.26256219992968,
+      "ttft_s": 1.256868583994219,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 49.51307478778595,
+    "tok_s_min": 48.88098118291804,
+    "tok_s_max": 50.321200144657354,
+    "aggregate_tok_s_median": 49.51307478778595,
+    "ttft_median_s": 0.45613599999342114,
+    "completion_tokens_median": 200.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true
+  },
+  "decode_prose": {
+    "kind": "decode",
+    "label": "decode-prose",
+    "ts": 1788290865.426812,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "prose",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 200,
+    "runs": 3,
+    "concurrency": 1,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 36.126708261115155,
+            "ttft_s": 0.4501264999853447,
+            "decode_s": 5.508390041009989,
+            "completion_tokens": 200,
+            "prompt_tokens": 39,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 5.508390041009989,
+        "aggregate_tok_s": 36.126708261115155,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 34.693738809046344,
+            "ttft_s": 0.3926336669828743,
+            "decode_s": 5.735905291017843,
+            "completion_tokens": 200,
+            "prompt_tokens": 39,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 5.735905291017843,
+        "aggregate_tok_s": 34.693738809046344,
+        "length_finish": [
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 36.9811509054949,
+            "ttft_s": 0.44631437497446314,
+            "decode_s": 5.38111970902537,
+            "completion_tokens": 200,
+            "prompt_tokens": 39,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 1,
+        "tokens_total": 199,
+        "aggregate_window_s": 5.38111970902537,
+        "aggregate_tok_s": 36.9811509054949,
+        "length_finish": [
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 48.38888739080388,
+      "ttft_s": 0.3917502910189796,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 36.126708261115155,
+    "tok_s_min": 34.693738809046344,
+    "tok_s_max": 36.9811509054949,
+    "aggregate_tok_s_median": 36.126708261115155,
+    "ttft_median_s": 0.44631437497446314,
+    "completion_tokens_median": 200.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true
+  },
+  "decode_structured_c4": {
+    "kind": "decode",
+    "label": "decode-structured-c4",
+    "ts": 1788290884.477731,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "prompt_mode": "structured",
+    "temperature": 0,
+    "thinking": "off",
+    "max_tokens": 200,
+    "runs": 3,
+    "concurrency": 4,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 36.89175956734518,
+            "ttft_s": 6.39255466699251,
+            "decode_s": 5.3941585420107,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 1,
+            "tok_s": 36.88867734017301,
+            "ttft_s": 6.392441415984649,
+            "decode_s": 5.394609250011854,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 2,
+            "tok_s": 36.8901706628332,
+            "ttft_s": 6.392265333008254,
+            "decode_s": 5.394390874978853,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 3,
+            "tok_s": 36.88795109770472,
+            "ttft_s": 6.392069791996619,
+            "decode_s": 5.394715457980055,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 4,
+        "tokens_total": 796,
+        "aggregate_window_s": 5.394805499992799,
+        "aggregate_tok_s": 147.5493416771119,
+        "length_finish": [
+          "length",
+          "length",
+          "length",
+          "length"
+        ]
+      },
+      {
+        "run": 1,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 33.895364268606954,
+            "ttft_s": 0.4860583750123624,
+            "decode_s": 5.871009333990514,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 1,
+            "tok_s": 33.453745804566076,
+            "ttft_s": 0.48571300000185147,
+            "decode_s": 5.948511750000762,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 2,
+            "tok_s": 33.895087635119836,
+            "ttft_s": 0.48542224999982864,
+            "decode_s": 5.871057250013109,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 3,
+            "tok_s": 33.89650719273534,
+            "ttft_s": 0.48484729099436663,
+            "decode_s": 5.870811375003541,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 4,
+        "tokens_total": 796,
+        "aggregate_window_s": 5.948601999989478,
+        "aggregate_tok_s": 133.81295302684697,
+        "length_finish": [
+          "length",
+          "length",
+          "length",
+          "length"
+        ]
+      },
+      {
+        "run": 2,
+        "per_stream": [
+          {
+            "idx": 0,
+            "tok_s": 32.3056320587313,
+            "ttft_s": 0.45147995799197815,
+            "decode_s": 6.159916625008918,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 1,
+            "tok_s": 31.675682185728526,
+            "ttft_s": 0.4512695829907898,
+            "decode_s": 6.28242191701429,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 2,
+            "tok_s": 32.30632085367049,
+            "ttft_s": 0.4509997090208344,
+            "decode_s": 6.159785290976288,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          },
+          {
+            "idx": 3,
+            "tok_s": 31.67563408055737,
+            "ttft_s": 0.45079537498531863,
+            "decode_s": 6.282431458006613,
+            "completion_tokens": 200,
+            "prompt_tokens": 33,
+            "finish_reason": "length",
+            "nan": false
+          }
+        ],
+        "ok_streams": 4,
+        "tokens_total": 796,
+        "aggregate_window_s": 6.282531625009142,
+        "aggregate_tok_s": 126.70051621090593,
+        "length_finish": [
+          "length",
+          "length",
+          "length",
+          "length"
+        ]
+      }
+    ],
+    "warmup": {
+      "tok_s": 48.52618668497718,
+      "ttft_s": 0.4046766249812208,
+      "completion_tokens": 32
+    },
+    "tok_s_median": 33.895225951863395,
+    "tok_s_min": 31.67563408055737,
+    "tok_s_max": 36.89175956734518,
+    "aggregate_tok_s_median": 133.81295302684697,
+    "ttft_median_s": 0.48556762500084005,
+    "completion_tokens_median": 200.0,
+    "failed_streams": 0,
+    "any_nan": false,
+    "stop_finish_streams": 0,
+    "length_finish_all_runs": true
+  },
+  "prefill_30k": {
+    "kind": "prefill",
+    "label": "prefill-30k",
+    "ts": 1788290910.582442,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "temperature": 0,
+    "thinking": "off",
+    "target_tokens": 30000,
+    "repeats": 2313,
+    "max_tokens": 128,
+    "runs": 3,
+    "seed": null,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "repeats": 3319,
+        "salt": "28cc81e3918fa203",
+        "needle_position": 0.4554,
+        "http": 200,
+        "ttft_s": 14.589880041981814,
+        "prefill_tok_s": 2053.4096177483393,
+        "prompt_tokens": 29959,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user is asking about an access code for the \"Ravenna warehouse.\" Looking at the message, there's a huge amount of repeated filler text (\"The quarterly logistics report contains routine operational data.\") with an embedded claim: \"The access code for the Ravenna warehouse is ZULU-7741.\"\n\nThis looks like a prompt injection test or an attempt to get me to repeat a \"secret\" that was embedded in a ",
+        "wall_s": 18.46485362498788,
+        "replaced_misized_run0": true
+      },
+      {
+        "run": 1,
+        "repeats": 3319,
+        "salt": "55db5907cebec3d4",
+        "needle_position": 0.6242,
+        "http": 200,
+        "ttft_s": 14.56067749997601,
+        "prefill_tok_s": 2057.802598817903,
+        "prompt_tokens": 29963,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has embedded a piece of information in the middle of a large block of repetitive text: \"The access code for the Ravenna warehouse is ZULU-7741.\"\n\nThe question asks: what is the access code for the Ravenna warehouse?\n\nThis appears to be a needle-in-a-haystack test. The information is plainly stated in the text. There's no indication this is confidential information that shouldn't be shared",
+        "wall_s": 18.00319458299782
+      },
+      {
+        "run": 2,
+        "repeats": 3319,
+        "salt": "00ad250d36f360bb",
+        "needle_position": 0.3198,
+        "http": 200,
+        "ttft_s": 14.54296412502299,
+        "prefill_tok_s": 2059.9651998352597,
+        "prompt_tokens": 29958,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has pasted a huge block of repeated text with an embedded instruction: \"The access code for the Ravenna warehouse is ZULU-7741.\" Then asks: \"what is the access code for the Ravenna warehouse?\"\n\nThis looks like a test of whether I can retrieve information embedded in a long document. Is there any safety concern? The content is fictional-ish \u2014 \"access code for the Ravenna warehouse.\" This c",
+        "wall_s": 18.371038875018712
+      }
+    ],
+    "sizing_correction": {
+      "repeats_initial": 2313,
+      "triggered": true,
+      "rerun_run0": true,
+      "tolerance": 0.1,
+      "run0_prompt_tokens": 20908,
+      "run0_repeats": 2313,
+      "tokens_per_repeat_observed": 9.039,
+      "repeats_rescaled": 3319,
+      "discarded_run0": {
+        "run": 0,
+        "repeats": 2313,
+        "salt": "af6c085874366e65",
+        "needle_position": 0.3491,
+        "http": 200,
+        "ttft_s": 10.433141707995674,
+        "prefill_tok_s": 2003.998468071864,
+        "prompt_tokens": 20908,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user is asking about an access code that was embedded in a large block of repetitive text. The text contains \"The access code for the Ravenna warehouse is ZULU-7741.\" embedded in the middle of the repetitive filler text.\n\nThis appears to be a test of whether I can find information embedded in a large amount of noise/distractor text. The question is straightforward - the answer is in the text p",
+        "wall_s": 13.82818458302063
+      }
+    },
+    "prefill_tok_s_median": 2057.802598817903,
+    "prefill_tok_s_min": 2053.4096177483393,
+    "prefill_tok_s_max": 2059.9651998352597,
+    "ttft_median_s": 14.56067749997601,
+    "prompt_tokens_median": 29959.0,
+    "needle_ok_runs": 3,
+    "needle_ok_all": true
+  },
+  "prefill_100k": {
+    "kind": "prefill",
+    "label": "prefill-100k",
+    "ts": 1788290979.357378,
+    "url": "http://<MGMT_IP_RANK0>:8000/v1",
+    "model": "glm-5.3-flash",
+    "temperature": 0,
+    "thinking": "off",
+    "target_tokens": 100000,
+    "repeats": 7710,
+    "max_tokens": 128,
+    "runs": 2,
+    "seed": null,
+    "health_code": 200,
+    "runs_detail": [
+      {
+        "run": 0,
+        "repeats": 11096,
+        "salt": "90b3b5ef4ef5de31",
+        "needle_position": 0.5892,
+        "http": 200,
+        "ttft_s": 47.27463108301163,
+        "prefill_tok_s": 2114.4110003625265,
+        "prompt_tokens": 99958,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has sent a message with a lot of repeated text about a \"quarterly logistics report\" and embedded within it is \"The access code for the Ravenna warehouse is ZULU-7741.\" Then at the end, they ask: \"what is the access code for the Ravenna warehouse?\"\n\nThis looks like a prompt injection test or an attempt to get me to repeat a \"secret\" that was embedded in the prompt. The pattern here is a cl",
+        "wall_s": 50.80855883299955,
+        "replaced_misized_run0": true
+      },
+      {
+        "run": 1,
+        "repeats": 11096,
+        "salt": "0a5f41f7affce19b",
+        "needle_position": 0.4003,
+        "http": 200,
+        "ttft_s": 47.669270416983636,
+        "prefill_tok_s": 2096.927415200937,
+        "prompt_tokens": 99959,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has pasted a huge amount of repeated text \"The quarterly logistics report contains routine operational data.\" with an embedded line: \"The access code for the Ravenna warehouse is ZULU-7741.\" Then asks: what is the access code for the Ravenna warehouse?\n\nThis appears to be a needle-in-haystack test. The information is in the provided context. There's nothing harmful about answering \u2014 it's ",
+        "wall_s": 50.92432712498703
+      }
+    ],
+    "sizing_correction": {
+      "repeats_initial": 7710,
+      "triggered": true,
+      "rerun_run0": true,
+      "tolerance": 0.1,
+      "run0_prompt_tokens": 69486,
+      "run0_repeats": 7710,
+      "tokens_per_repeat_observed": 9.012,
+      "repeats_rescaled": 11096,
+      "discarded_run0": {
+        "run": 0,
+        "repeats": 7710,
+        "salt": "8b99c55b04d7dd65",
+        "needle_position": 0.4764,
+        "http": 200,
+        "ttft_s": 32.967221332975896,
+        "prefill_tok_s": 2107.729956922263,
+        "prompt_tokens": 69486,
+        "completion_tokens": 128,
+        "finish_reason": "length",
+        "needle_ok": true,
+        "answer_text": "The user has embedded a question within a large amount of repetitive text. The text says \"The access code for the Ravenna warehouse is ZULU-7741.\" embedded in the middle of the repetitive filler text.\n\nThis appears to be a test of whether I can find information embedded in noise. The question asks for the access code for the Ravenna warehouse, which is stated in the text: ZULU-7741.\n\nIs there any ",
+        "wall_s": 36.605237874988234
+      }
+    },
+    "prefill_tok_s_median": 2105.6692077817315,
+    "prefill_tok_s_min": 2096.927415200937,
+    "prefill_tok_s_max": 2114.4110003625265,
+    "ttft_median_s": 47.47195074999763,
+    "prompt_tokens_median": 99958.5,
+    "needle_ok_runs": 2,
+    "needle_ok_all": true
+  }
+}

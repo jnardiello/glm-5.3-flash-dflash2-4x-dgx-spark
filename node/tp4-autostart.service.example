@@ -1,0 +1,44 @@
+# TEMPLATE for /etc/systemd/system/tp4-autostart.service — cluster autostart from rank 0.
+#
+# `<USER>` and the four `<MGMT_IP_RANKn>` are RENDER TOKENS, not fields to edit by hand:
+# scripts/bootstrap-node.sh (phase 6, rank 0 only) replaces <USER> with the node's own
+# `whoami` and each <MGMT_IP_RANKn> with the n-th entry of MGMT_IPS in cluster.env, then
+# installs the result and `enable`s it (never `start`s it). The rendered unit is written to
+# node/tp4-autostart.service, which is gitignored.
+#
+# For the login `alice` and the management addresses 192.0.2.11..14 of the example
+# cluster.env, the two rendered lines read:
+#
+#   Environment="TP4_HOSTS=alice@192.0.2.11 alice@192.0.2.12 alice@192.0.2.13 alice@192.0.2.14"
+#   ExecStart=/home/alice/tp4/tp4ctl up
+#
+# Prerequisites:
+#   - NOPASSWD sudoers for <USER> on all 4 nodes (docker, sysctl, tee, poweroff);
+#   - ssh keys from rank 0 towards ALL 4 nodes, RANK 0 INCLUDED (rank 0 orchestrates
+#     over ssh towards itself as well), passphrase-less and BatchMode-compatible;
+#   - the host keys of the 4 IPs already in <USER>'s ~/.ssh/known_hosts on rank 0,
+#     otherwise BatchMode makes the connection fail instead of asking for confirmation;
+#   - sshd listening on port 22 of EVERY node, rank 0 included: if ssh.socket/ssh.service
+#     are masked on rank 0, `tp4ctl up` stays stuck in wait_peers for 10 minutes and then
+#     dies, because rank 0 cannot reach itself.
+#
+# TP4_HOSTS uses the mgmt IPs because the workstation's ssh aliases do not exist on the node.
+# The quotes around the whole assignment are mandatory: without them systemd splits the
+# value on spaces and TP4_HOSTS ends up holding only the first host (a 1-node cluster).
+
+[Unit]
+Description=TP4 GLM-5.3-Flash cluster autostart (rank 0 orchestrator)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=<USER>
+Environment="TP4_HOSTS=<USER>@<MGMT_IP_RANK0> <USER>@<MGMT_IP_RANK1> <USER>@<MGMT_IP_RANK2> <USER>@<MGMT_IP_RANK3>"
+ExecStartPre=/bin/sleep 45
+ExecStart=/home/<USER>/tp4/tp4ctl up
+TimeoutStartSec=2700
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

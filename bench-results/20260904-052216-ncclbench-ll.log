@@ -1,0 +1,26 @@
+entry.sh: RANK=0 WORLD_SIZE=4 MASTER_ADDR=<MGMT_IP_RANK0> MASTER_PORT=29521 LOCAL_RANK=0
+entry.sh: (MASTER_PORT = launcher --master-port 29520 + 1, to avoid a stale vLLM rendez-vous)
+NCCLBENCH nccl_version=(2, 29, 7) world=4
+NCCLBENCH env NCCL_ALGO=Ring
+NCCLBENCH env NCCL_PROTO=LL
+NCCLBENCH env NCCL_MIN_NCHANNELS=4
+NCCLBENCH env NCCL_MAX_NCHANNELS=4
+NCCLBENCH env LD_PRELOAD=/opt/patched-nccl/libnccl.so.2
+/usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+[rank0]:[W904 03:21:58.558144477 ProcessGroupNCCL.cpp:5276] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()
+NCCL version 2.30.7+cuda13.0
+[NCCL-RELAY] discover: NIC rocep1s0f0 ip=<FABRIC_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: NIC rocep1s0f1 ip=<FABRIC_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: NIC roceP2p1s0f0 ip=<LINK_LOCAL_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: NIC roceP2p1s0f1 ip=<LINK_LOCAL_IP> gid_index=3 mtu=5
+[NCCL-RELAY] discover: 4 RoCE NIC(s) usable
+[NCCL-RELAY] RING: could not detect local rank from NIC IPs; relay disabled
+NCCLBENCH {"bytes": 8192, "med_us_sync": 46.728, "p90_us_sync": 50.432, "batched_us": 35.066, "busbw_gbit": 2.803, "iters": 200, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH {"bytes": 32768, "med_us_sync": 57.584, "p90_us_sync": 61.167, "batched_us": 43.29, "busbw_gbit": 9.083, "iters": 200, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH {"bytes": 131072, "med_us_sync": 92.415, "p90_us_sync": 95.647, "batched_us": 86.122, "busbw_gbit": 18.263, "iters": 200, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH {"bytes": 1048576, "med_us_sync": 314.415, "p90_us_sync": 409.455, "batched_us": 292.002, "busbw_gbit": 43.092, "iters": 200, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH {"bytes": 16777216, "med_us_sync": 4478.008, "p90_us_sync": 4784.992, "batched_us": 4460.392, "busbw_gbit": 45.137, "iters": 200, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH {"bytes": 67108864, "med_us_sync": 18613.713, "p90_us_sync": 18843.952, "batched_us": 18052.242, "busbw_gbit": 44.61, "iters": 200, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH {"bytes": 314572800, "med_us_sync": 85187.541, "p90_us_sync": 85562.668, "batched_us": 84588.162, "busbw_gbit": 44.626, "iters": 20, "world": 4, "nccl_version": [2, 29, 7]}
+NCCLBENCH DONE
