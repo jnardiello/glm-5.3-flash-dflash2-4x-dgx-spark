@@ -7,7 +7,8 @@ executed. The other bench scripts under `scripts/bench/` are Python and do not u
 `common.sh` holds what every one of them used to repeat: the `cluster.env` +
 `$TP4_ENV` overlay loader (`tp4_load_env`), the two ssh option sets
 (`TP4_SSH_OPTS`, `TP4_SSH_OPTS_STRICT`), the `timeout`/`gtimeout` probe
-(`tp4_timeout_bin`) and `log`/`warn`/`die`. Each caller sets `TP4_LOG_TAG`
+(`tp4_timeout_bin`), the per-rank hardware resolver (`tp4_resolve_rank_value`) and
+`log`/`warn`/`die`. Each caller sets `TP4_LOG_TAG`
 before sourcing, so the messages keep that script's own prefix.
 
 `tp4_load_env --require` also VALIDATES the recipe once it is sourced: every key of
@@ -18,6 +19,13 @@ dummy value `cluster.env.example` ships, and the three POSITIONAL topology lists
 `MGMT_IPS[0]` — a shorter or longer list silently gives a rank another rank's address. All
 the failures come out in one message. Both key lists are hard-coded in `common.sh` and must
 be kept in sync with `cluster.env.example`.
+
+The verified ASUS hardware values are scalar fallbacks. A homogeneous deployment can set
+`MGMT_IF`, `FABRIC_IFACES`, `NCCL_IB_HCA`, `NCCL_IB_GID_INDEX` and
+`NETPLAN_RENDERER`; a heterogeneous deployment can instead provide the corresponding
+four-element `*_BY_RANK` arrays. An array, when non-empty, wins over its scalar and must
+contain exactly four non-empty entries. `tp4_validate_rank_config` enforces this contract;
+`tp4_load_env --require` invokes the same validation as part of `tp4_check_env`.
 
 The validation is also callable on its own as `tp4_check_env <repo> [<keys>]`, with `<keys>`
 defaulting to `TP4_REQUIRED_KEYS`: `node/nccl/build.sh` passes just `NODES`, the only key it

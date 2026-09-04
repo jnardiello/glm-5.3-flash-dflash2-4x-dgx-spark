@@ -16,7 +16,7 @@ set -euo pipefail
 #                                 # must be clean at the source, not clean thanks to a rewrite
 #   scripts/mirror-snapshot.sh --scan-static <dir>   # only the rules that need no cluster.env
 #                                 # (IPv4, e-mail, MAC, IPv6/GID, key material, api tokens), on
-#                                 # any directory, for CI on a plain checkout
+#                                 # any directory, on a plain checkout (no cluster.env)
 #
 # Exit: 0 clean, 1 at least one hit, 2 usage error.
 #
@@ -89,7 +89,7 @@ done
 [ -n "$MODE" ] || { echo "$USAGE" >&2; exit 2; }
 
 # cluster.env holds the mapping every rewrite and every site-specific rule is derived from.
-# --scan-static is the one mode that does without it, on purpose: it is what CI can run on a
+# --scan-static is the one mode that does without it, on purpose: it is what a plain checkout can run without a
 # checkout that has no site configuration at all.
 if [ "$MODE" != scan-static ]; then
   [ -f "$REPO/cluster.env" ] || { echo "cluster.env missing: copy cluster.env.example and fill it" >&2; exit 1; }
@@ -337,7 +337,7 @@ scan "api token"             'hf_[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|sk-[A-Za-
 
 # --scan-static stops here: everything below needs either the site mapping (residual aliases,
 # private terms) or the repository the snapshot was built from (excluded paths, tracked private
-# files). It is a CI gate on the SHAPE of the content, not a publication gate.
+# files). It is a check on the SHAPE of the content, not a publication gate.
 if [ "$MODE" = scan-static ]; then
   log "files scanned: $(find "$DIR" -type f | wc -l | tr -d ' ')"
   if [ "$HITS" = 0 ]; then

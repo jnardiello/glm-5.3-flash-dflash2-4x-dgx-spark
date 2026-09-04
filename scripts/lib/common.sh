@@ -22,6 +22,8 @@
 #   TP4_SSH_OPTS_STRICT    StrictHostKeyChecking=yes (a read-only verifier must never write
 #                          a known_hosts entry)
 #   tp4_timeout_bin        prints timeout | gtimeout | nothing (macOS ships neither)
+#   tp4_validate_rank_config
+#   tp4_resolve_rank_value <rank> <scalar> <override-array> <ASUS-default>
 
 : "${TP4_LOG_TAG:=[tp4]}"
 
@@ -33,6 +35,67 @@ die()  { echo "$TP4_LOG_TAG ERROR: $*" >&2; exit 1; }
 TP4_SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
 # shellcheck disable=SC2034
 TP4_SSH_OPTS_STRICT=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10)
+
+# Verified ASUS Ascent GX10 hardware profile. cluster.env may set the corresponding scalar
+# for another homogeneous four-node deployment, or a four-element *_BY_RANK array for a
+# heterogeneous one. Keep the node-side copy in launcher/launch-glm53-tp4.sh in sync.
+TP4_DEFAULT_MGMT_IF=enP7s7
+TP4_DEFAULT_FABRIC_IFACES="enp1s0f0np0 enp1s0f1np1 enP2p1s0f0np0 enP2p1s0f1np1"
+TP4_DEFAULT_NCCL_IB_HCA="rocep1s0f0,rocep1s0f1"
+TP4_DEFAULT_NCCL_IB_GID_INDEX=3
+TP4_DEFAULT_NETPLAN_RENDERER=NetworkManager
+TP4_RANK_OVERRIDE_KEYS="MGMT_IF_BY_RANK FABRIC_IFACES_BY_RANK NCCL_IB_HCA_BY_RANK NCCL_IB_GID_INDEX_BY_RANK NETPLAN_RENDERER_BY_RANK"
+
+# Print (without exiting) every optional override-array problem. An explicitly empty array
+# means "no overrides"; otherwise there must be one non-empty value per TP4 rank. The names
+# are fixed above, not supplied by cluster.env, so the narrow evals cannot select arbitrary
+# variables or execute a value.
+tp4_rank_config_problems() {
+  local _tp4_name _tp4_n _tp4_i _tp4_value _tp4_probs=""
+  for _tp4_name in $TP4_RANK_OVERRIDE_KEYS; do
+    declare -p "$_tp4_name" >/dev/null 2>&1 || continue
+    eval "_tp4_n=\${#${_tp4_name}[@]}"
+    [ "$_tp4_n" -gt 0 ] || continue
+    if [ "$_tp4_n" -ne 4 ]; then
+      _tp4_probs="$_tp4_probs; $_tp4_name has $_tp4_n entries, expected exactly 4 (one per rank)"
+      continue
+    fi
+    _tp4_i=0
+    while [ "$_tp4_i" -lt "$_tp4_n" ]; do
+      eval "_tp4_value=\${${_tp4_name}[$_tp4_i]-}"
+      [ -n "$_tp4_value" ] || _tp4_probs="$_tp4_probs; $_tp4_name[$_tp4_i] is empty"
+      _tp4_i=$((_tp4_i + 1))
+    done
+  done
+  printf '%s' "$_tp4_probs"
+}
+
+tp4_validate_rank_config() {
+  local _tp4_probs
+  _tp4_probs=$(tp4_rank_config_problems)
+  [ -z "$_tp4_probs" ] || die "cluster.env: ${_tp4_probs#; }"
+}
+
+# Resolve one rank-local setting. A non-empty four-element override array wins over the
+# homogeneous scalar; the verified ASUS value is the final fallback. Validation is kept
+# separate so callers can validate once and resolve several settings cheaply.
+tp4_resolve_rank_value() {
+  local _tp4_rank=$1 _tp4_scalar=$2 _tp4_array=$3 _tp4_default=$4 _tp4_n=0 _tp4_value=""
+  case "$_tp4_rank" in ''|*[!0-9]*) die "invalid rank: $_tp4_rank" ;; esac
+  [ "$_tp4_rank" -lt 4 ] || die "invalid rank: $_tp4_rank (expected 0..3)"
+  if declare -p "$_tp4_array" >/dev/null 2>&1; then
+    eval "_tp4_n=\${#${_tp4_array}[@]}"
+    if [ "$_tp4_n" -gt 0 ]; then
+      [ "$_tp4_n" -eq 4 ] || die "cluster.env: $_tp4_array has $_tp4_n entries, expected exactly 4"
+      eval "_tp4_value=\${${_tp4_array}[$_tp4_rank]-}"
+      [ -n "$_tp4_value" ] || die "cluster.env: $_tp4_array[$_tp4_rank] is empty"
+      printf '%s' "$_tp4_value"
+      return 0
+    fi
+  fi
+  eval "_tp4_value=\${${_tp4_scalar}:-}"
+  printf '%s' "${_tp4_value:-$_tp4_default}"
+}
 
 # Prints the name of a usable timeout(1), or nothing: without the binary the callers'
 # guards degrade instead of breaking.
@@ -120,6 +183,9 @@ tp4_check_env() {
     [ "${MASTER_IP-}" = "${_tp4_mg[0]-}" ] \
       || _tp4_probs="$_tp4_probs; MASTER_IP must be MGMT_IPS[0] (the rendez-vous runs on rank 0)"
   fi
+
+  _tp4_v=$(tp4_rank_config_problems)
+  [ -z "$_tp4_v" ] || _tp4_probs="$_tp4_probs$_tp4_v"
 
   [ -n "$_tp4_probs" ] || return 0
   die "cluster.env: ${_tp4_probs#; } — see README § Site configuration"
