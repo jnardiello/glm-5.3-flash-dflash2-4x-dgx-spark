@@ -194,7 +194,7 @@ PRIVATE_TRACKED_RE="$PRIVATE_TRACKED_RE"'|(^|/)mirror-private-terms\.txt$'
 # text_list <out-file>: NUL-separated list of every text file of the snapshot.
 text_list() {
   : >"$1"
-  find "$DIR" -type f -print0 \
+  find "$DIR" -name .git -prune -o -type f -print0 \
     | while IFS= read -r -d '' f; do
         if LC_ALL=C grep -Iq . "$f" 2>/dev/null; then printf '%s\0' "$f" >>"$1"; fi
       done
