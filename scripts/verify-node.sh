@@ -13,6 +13,7 @@ set -euo pipefail
 #   scripts/verify-node.sh                 # all nodes, node + cluster checks
 #   scripts/verify-node.sh --quick         # node checks only (one ssh per node)
 #   scripts/verify-node.sh --live          # also: containers up, /health 200, rank-0 log lines
+#   scripts/verify-node.sh --full-model    # also hash every model file against the pinned manifest
 #   scripts/verify-node.sh --host <ALIAS_RANK2>   # a single node (cluster-scope checks are skipped)
 #
 # Output: one row per check, `node | check | PASS/FAIL/WARN/SKIP | detail`.
@@ -30,13 +31,13 @@ set -euo pipefail
 # must never write a `known_hosts` entry. A node that does not answer inside the budget gets
 # one FAIL row plus a SKIP row per check it owed, so the totals stay comparable between runs.
 #
-# Expected versions come from node/bootstrap/versions.env (KERNEL, DRIVER, RDMA_CORE_MIN,
+# Expected versions come from scripts/node/bootstrap/versions.env (KERNEL, DRIVER, RDMA_CORE_MIN,
 # OS_RELEASE, DOCKER_MIN, NVIDIA_CTK_MIN, CX7_FW, TAILSCALE_MIN, IMAGE_DIGEST, MODEL_REV,
-# DRAFT_REV) and the patched-NCCL sha from node/nccl/SHA256SUMS, its ONLY source (a missing
+# DRAFT_REV) and the patched-NCCL sha from scripts/node/nccl/SHA256SUMS, its ONLY source (a missing
 # SHA256SUMS aborts the run). A key absent from versions.env makes its row SKIP or WARN, never
 # FAIL: an unpinned value is not a drift.
-# Sysctl expectations are PARSED from node/etc/common/98-tp4-fabric.conf and 99-tp4-vm.conf,
-# the fabric interface list from node/etc/common/tp4-fabric-iptables.sh, so this script never
+# Sysctl expectations are PARSED from scripts/node/etc/common/98-tp4-fabric.conf and 99-tp4-vm.conf,
+# the fabric interface list from scripts/node/etc/common/tp4-fabric-iptables.sh, so this script never
 # duplicates a value that already lives in the repo.
 # No address literal appears here or in the output: hosts, IPs and paths come from cluster.env.
 
@@ -45,22 +46,27 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 TP4_LOG_TAG='[verify]'
 # shellcheck source=lib/common.sh
 . "$REPO/scripts/lib/common.sh"
-tp4_load_env "$REPO" --require
 
 QUICK=0
 LIVE=0
+FULL_MODEL=${VERIFY_MODEL_MANIFEST:-0}
 ONLY_HOST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick) QUICK=1; shift ;;
     --live)  LIVE=1; shift ;;
+    --full-model) FULL_MODEL=1; shift ;;
     --host)  [ $# -ge 2 ] || { echo "--host needs a node alias" >&2; exit 2; }; ONLY_HOST=$2; shift 2 ;;
     -h|--help) sed -n '3,37p' "$0"; exit 0 ;;   # keep in sync with the header block above
-    *) echo "usage: $0 [--quick] [--live] [--host <alias>]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--quick] [--live] [--full-model] [--host <alias>]" >&2; exit 2 ;;
   esac
 done
 
+# Verification needs site values, while --help must remain usable from a fresh checkout.
+tp4_load_env "$REPO" --require
+
 read -r -a HOSTS <<<"${TP4_HOSTS:-$NODES}"
+read -r -a NODE_ALIASES <<<"$NODES"
 RANK0=${HOSTS[0]}
 if [ -n "$ONLY_HOST" ]; then
   found=0
@@ -72,6 +78,9 @@ fi
 # entry, and every probe has to come back or die inside PROBE_TIMEOUT.
 SSH_OPTS=("${TP4_SSH_OPTS_STRICT[@]}" -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
 PROBE_TIMEOUT=60
+MODEL_VERIFY_TIMEOUT=1800
+[ "$FULL_MODEL" = 0 ] || [ "$FULL_MODEL" = 1 ] \
+  || die "VERIFY_MODEL_MANIFEST must be 0 or 1"
 
 TIMEOUT_BIN=$(tp4_timeout_bin)
 
@@ -91,32 +100,41 @@ bounded() {
 }
 
 # ---------------------------------------------------------------- expectations from the repo
-KERNEL=6.17.0-1031-nvidia          # fallback when node/bootstrap/versions.env is absent
+KERNEL=6.17.0-1031-nvidia          # fallback when scripts/node/bootstrap/versions.env is absent
 DRIVER=580.173.02
 IMAGE_DIGEST=""                    # no pin without versions.env: the digest row then WARNs
 VERSIONS_SRC="built-in default"
-if [ -f "$REPO/node/bootstrap/versions.env" ]; then
+if [ -f "$REPO/scripts/node/bootstrap/versions.env" ]; then
   # shellcheck disable=SC1091
-  . "$REPO/node/bootstrap/versions.env"
-  VERSIONS_SRC="node/bootstrap/versions.env"
+  . "$REPO/scripts/node/bootstrap/versions.env"
+  VERSIONS_SRC="scripts/node/bootstrap/versions.env"
 fi
 
-# node/nccl/SHA256SUMS is the SINGLE source for the patched library's sha (install-nccl.sh
+MODEL_MANIFEST=""
+MODEL_TEMPLATE_SHA=""
+if [ -n "${MODEL_REV:-}" ]; then
+  MODEL_MANIFEST="$REPO/scripts/node/model-manifests/$MODEL_REV.json"
+  [ -r "$MODEL_MANIFEST" ] || die "model release manifest missing: $MODEL_MANIFEST"
+  MODEL_TEMPLATE_SHA=$(python3 "$REPO/scripts/model_manifest.py" field "$MODEL_MANIFEST" sha256 --file chat_template.jinja) \
+    || die "cannot read chat_template.jinja hash from $MODEL_MANIFEST"
+fi
+
+# scripts/node/nccl/SHA256SUMS is the SINGLE source for the patched library's sha (install-nccl.sh
 # reads the same file). No built-in fallback: a stale literal here would silently validate the
 # wrong library, so a missing or unparsable SHA256SUMS aborts the run instead.
-NCCL_SHA_SRC="node/nccl/SHA256SUMS"
-[ -f "$REPO/node/nccl/SHA256SUMS" ] || die "node/nccl/SHA256SUMS missing: it is the only source for the patched NCCL sha"
-NCCL_SHA=$(awk '/libnccl\.so\.2/{print $1; exit}' "$REPO/node/nccl/SHA256SUMS")
-[ -n "$NCCL_SHA" ] || die "no libnccl.so.2 line in node/nccl/SHA256SUMS"
+NCCL_SHA_SRC="scripts/node/nccl/SHA256SUMS"
+[ -f "$REPO/scripts/node/nccl/SHA256SUMS" ] || die "scripts/node/nccl/SHA256SUMS missing: it is the only source for the patched NCCL sha"
+NCCL_SHA=$(awk '/libnccl\.so\.2/{print $1; exit}' "$REPO/scripts/node/nccl/SHA256SUMS")
+[ -n "$NCCL_SHA" ] || die "no libnccl.so.2 line in scripts/node/nccl/SHA256SUMS"
 
 # sysctl expectations: every `key=value` line of the two drop-ins.
-SYSCTL_EXPECT=$(cat "$REPO"/node/etc/common/98-tp4-fabric.conf "$REPO"/node/etc/common/99-tp4-vm.conf 2>/dev/null \
+SYSCTL_EXPECT=$(cat "$REPO"/scripts/node/etc/common/98-tp4-fabric.conf "$REPO"/scripts/node/etc/common/99-tp4-vm.conf 2>/dev/null \
   | sed -e 's/#.*//' -e 's/[[:space:]]//g' | grep -E '^[a-z0-9._]+=[^=]+$' | tr '\n' ' ')
-[ -n "$SYSCTL_EXPECT" ] || die "no sysctl key parsed from node/etc/common/9*-tp4-*.conf"
+[ -n "$SYSCTL_EXPECT" ] || die "no sysctl key parsed from scripts/node/etc/common/9*-tp4-*.conf"
 
-# fabric interfaces: the list the iptables unit itself uses.
-FAB_IFACES=$(sed -n 's/^IFACES="\(.*\)"$/\1/p' "$REPO/node/etc/common/tp4-fabric-iptables.sh")
-[ -n "$FAB_IFACES" ] || die "no IFACES= line in node/etc/common/tp4-fabric-iptables.sh"
+# Rank-local network values are resolved inside check_node: heterogeneous deployments may
+# use a different management NIC, fabric netdev/HCA mapping or RoCEv2 GID index per rank.
+FAB_IFACES=""; RESOLVED_MGMT_IF=""; RESOLVED_HCAS=""; RESOLVED_GID=""
 
 # `-v` mount sources of EXTRA_DOCKER_ENV, the same preflight the launcher does on the node.
 MOUNT_SRCS=""
@@ -202,8 +220,27 @@ else
 fi
 say rdma "$(dpkg-query -W -f='${Version}' rdma-core 2>/dev/null)"
 say holds "$(apt-mark showhold 2>/dev/null | tr '\n' ' ')"
+say mgmt "$(ip -4 -o addr show dev "$P_MGMT_IF" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
+bad_rdma=""
+oldifs=$IFS; IFS=,; set -- $P_HCAS; IFS=$oldifs
+for h in "$@"; do
+  [ -d "/sys/class/infiniband/$h" ] || { bad_rdma="$bad_rdma $h(absent)"; continue; }
+  gid_ok=0
+  for port in /sys/class/infiniband/"$h"/ports/*; do
+    [ -d "$port" ] || continue
+    type=$(cat "$port/gid_attrs/types/$P_GID" 2>/dev/null || true)
+    [ "$type" = "RoCE v2" ] && gid_ok=1
+  done
+  [ "$gid_ok" = 1 ] || bad_rdma="$bad_rdma $h(gid-$P_GID-not-RoCE-v2)"
+done
+say rdma_selection "${bad_rdma:-ok}"
 for kv in $P_SYSCTL; do say "sysctl:${kv%%=*}" "$(sysctl -n "${kv%%=*}" 2>/dev/null)"; done
 say unit "$(systemctl is-enabled tp4-fabric-iptables 2>&1 | tail -1)/$(systemctl is-active tp4-fabric-iptables 2>&1 | tail -1)"
+fabric_reload=$(systemctl show tp4-fabric-iptables -p NeedDaemonReload --value 2>/dev/null || echo unknown)
+autostart_reload=skip
+[ "$P_RANK" != 0 ] || autostart_reload=$(systemctl show tp4-autostart -p NeedDaemonReload --value 2>/dev/null || echo unknown)
+say daemon_reload "fabric=${fabric_reload:-unknown} autostart=${autostart_reload:-unknown}"
+say fabric_env_sha "$(sha256sum /etc/default/tp4-fabric-iptables 2>/dev/null | awk '{print $1}')"
 miss=""
 for i in $P_IFACES; do
   sudo -n iptables -C DOCKER-USER -i "$i" -j ACCEPT 2>/dev/null || miss="$miss $i(-i)"
@@ -235,9 +272,9 @@ say draft "$( [ -f "$DRAFT/config.json" ] && echo config.json || echo no-config 
 # Effective identity of the checkpoints when no HF revision is pinned: the sha256 of
 # config.json (which carries the quantization block and every architecture field).
 say model_sha "$(sha256sum "$MODEL/config.json" 2>/dev/null | awk '{print $1}')"
+say template_sha "$(sha256sum "$MODEL/chat_template.jinja" 2>/dev/null | awk '{print $1}')"
 say draft_sha "$(sha256sum "$DRAFT/config.json" 2>/dev/null | awk '{print $1}')"
-# Fan-out marker written by scripts/fetch-fp8-weights.sh: MODEL_REV, or "HEAD" when unpinned.
-# Absent on the head, which downloads instead of receiving an rsync.
+# Whole-snapshot marker written atomically by scripts/fetch-fp8-weights.sh after all ranks verify.
 say model_marker "$(cat "$MODEL/.glm53-fp8-synced" 2>/dev/null)"
 say image "$(sudo -n docker image inspect --format '{{.Size}}' "$P_IMAGE" 2>/dev/null || echo absent)"
 # Content digest of the image actually present here: the tag is mutable, this is not.
@@ -259,6 +296,8 @@ probe_host() {
   local host=$1
   PROBE=$(bounded "$PROBE_TIMEOUT" ssh "${SSH_OPTS[@]}" "$host" "env \
       P_SYSCTL='$SYSCTL_EXPECT' P_IFACES='$FAB_IFACES' P_MODEL='$MODEL_DIR' P_DRAFT='$DRAFT_DIR' \
+      P_MGMT_IF='$RESOLVED_MGMT_IF' P_HCAS='$RESOLVED_HCAS' P_GID='$RESOLVED_GID' \
+      P_RANK='$RESOLVED_RANK' \
       P_NCCL='$NCCL_DIR' P_IMAGE='$IMAGE' P_CONTAINER='$CONTAINER' P_MOUNTS='$MOUNT_SRCS' bash -s" \
       <"$PROBE_SCRIPT") || return 1
   [ -n "$PROBE" ] || return 1
@@ -270,21 +309,33 @@ pv() { printf '%s\n' "$PROBE" | awk -F'\t' -v k="$1" '$1==k{print $2; exit}'; }
 # run against an unreachable node has the same row count as a healthy one.
 node_check_labels() {   # node_check_labels <rank>
   local kv
-  printf '%s\n' kernel "OS release" "nvidia driver" "rdma-core" "docker gpu access" \
+  printf '%s\n' kernel "OS release" "nvidia driver" "management interface" "NCCL HCA/GID" "rdma-core" "docker gpu access" \
                  "docker version" "nvidia-ctk version" "/dev/infiniband" "ibv_devinfo ports" \
                  "CX-7 firmware" "apt holds (kernel)"
   for kv in $SYSCTL_EXPECT; do printf 'sysctl %s\n' "${kv%%=*}"; done
   printf '%s\n' "tp4-fabric-iptables" "DOCKER-USER rules" "sudo -n" "CX-7 MTU/speed" "sshd :22" \
+                 "fabric firewall env" "systemd daemon reload" \
                  "tailscale" "iommu passthrough" "model dir" "drafter dir" "weights fingerprint" \
-                 "model revision" "drafter revision" "docker image" "docker image digest" "patched NCCL sha" \
+                 "model revision" "chat template" "drafter revision" "docker image" "docker image digest" "patched NCCL sha" \
                  "patches/*.py" "EXTRA_DOCKER_ENV -v" "free disk"
+  [ "$FULL_MODEL" != 1 ] || printf '%s\n' "model manifest"
   [ "$1" != 0 ] || printf '%s\n' "tp4-autostart (rank 0)"
   [ "$LIVE" != 1 ] || printf '%s\n' "container running"
   return 0
 }
 
 check_node() {   # check_node <host> <rank>
-  local host=$1 rank=$2 v w rc miss pkg label
+  local host=$1 rank=$2 v w rc miss pkg label fabric_env_src fabric_env_sha
+  local -a _verify_mgmt_ips
+
+  RESOLVED_MGMT_IF=$(tp4_resolve_rank_value "$rank" MGMT_IF MGMT_IF_BY_RANK "$TP4_DEFAULT_MGMT_IF")
+  FAB_IFACES=$(tp4_resolve_rank_value "$rank" FABRIC_IFACES FABRIC_IFACES_BY_RANK "$TP4_DEFAULT_FABRIC_IFACES")
+  RESOLVED_HCAS=$(tp4_resolve_rank_value "$rank" NCCL_IB_HCA NCCL_IB_HCA_BY_RANK "$TP4_DEFAULT_NCCL_IB_HCA")
+  RESOLVED_GID=$(tp4_resolve_rank_value "$rank" NCCL_IB_GID_INDEX NCCL_IB_GID_INDEX_BY_RANK "$TP4_DEFAULT_NCCL_IB_GID_INDEX")
+  RESOLVED_RANK=$rank
+  fabric_env_src="$REPO/scripts/node/etc/${NODE_ALIASES[$rank]}/tp4-fabric-iptables.env"
+  [ -r "$fabric_env_src" ] || die "derived firewall environment missing: $fabric_env_src (run scripts/render-netplan.sh --write)"
+  fabric_env_sha=$(shasum -a 256 "$fabric_env_src" | awk '{print $1}')
 
   if ! probe_host "$host"; then
     row "$host" "ssh reachable" FAIL "no answer within ${PROBE_TIMEOUT}s (BatchMode, StrictHostKeyChecking=yes)"
@@ -308,6 +359,17 @@ check_node() {   # check_node <host> <rank>
 
   v=$(pv driver); rc=1; [ "$v" = "$DRIVER" ] && rc=0
   verdict "$host" "nvidia driver" $rc "$v (expected $DRIVER, from $VERSIONS_SRC)"
+
+  v=$(pv mgmt)
+  # Compare with this rank's expected IP, not always the first management address.
+  read -r -a _verify_mgmt_ips <<<"$MGMT_IPS"
+  rc=1; case " $v " in *" ${_verify_mgmt_ips[$rank]}/"*) rc=0 ;; esac
+  verdict "$host" "management interface" $rc \
+    "${RESOLVED_MGMT_IF}: ${v:-no IPv4} (expected rank $rank management address)"
+
+  v=$(pv rdma_selection); rc=1; [ "$v" = ok ] && rc=0
+  verdict "$host" "NCCL HCA/GID" $rc \
+    "$([ "$rc" = 0 ] && echo "$RESOLVED_HCAS at RoCEv2 GID index $RESOLVED_GID" || echo "$v")"
 
   # rdma-core: the major version is what versions.env pins (RDMA_CORE_MIN).
   v=$(pv rdma); w=${v%%[!0-9]*}; rc=1
@@ -397,6 +459,16 @@ check_node() {   # check_node <host> <rank>
   v=$(pv docker_user); rc=1; [ "$v" = complete ] && rc=0
   verdict "$host" "DOCKER-USER rules" $rc "$([ "$rc" = 0 ] && echo "all -i/-o ACCEPT present" || echo "missing:$v")"
 
+  v=$(pv fabric_env_sha); rc=1; [ "$v" = "$fabric_env_sha" ] && rc=0
+  verdict "$host" "fabric firewall env" $rc \
+    "sha256 ${v:-absent} (expected ${fabric_env_sha}, scripts/node/etc/${NODE_ALIASES[$rank]}/tp4-fabric-iptables.env)"
+
+  v=$(pv daemon_reload); rc=1
+  if [ "$rank" = 0 ]; then [ "$v" = "fabric=no autostart=no" ] && rc=0
+  else [ "$v" = "fabric=no autostart=skip" ] && rc=0
+  fi
+  verdict "$host" "systemd daemon reload" $rc "$v (NeedDaemonReload must be no)"
+
   v=$(pv sudon); rc=1; [ "$v" = ok ] && rc=0
   verdict "$host" "sudo -n" $rc "$([ "$rc" = 0 ] && echo "passwordless sudo works" || echo "sudo -n refused: /etc/sudoers.d/99-tp4-nopasswd")"
 
@@ -421,7 +493,7 @@ check_node() {   # check_node <host> <rank>
   fi
 
   v=$(pv iommu); rc=1; case "$v" in passthrough*) rc=0 ;; esac
-  verdict "$host" "iommu passthrough" $rc "${v:-unknown} (node/host/tp4-iommu.sh --status)"
+  verdict "$host" "iommu passthrough" $rc "${v:-unknown} (scripts/node/host/tp4-iommu.sh --status)"
 
   # `config.json <found>/<expected>`: the expected shard count is read from the shards' own
   # `-of-000NN` suffix, so it is never duplicated here.
@@ -443,26 +515,48 @@ check_node() {   # check_node <host> <rank>
       "config.json sha256 $w · $miss shards (found/expected from the -of-000NN suffix)"
   fi
 
-  # Identity of the checkpoint, strongest evidence first: the HF commit the downloader
-  # recorded in .cache/huggingface/download/*.metadata (only on the node that downloaded —
-  # the fan-out excludes .cache/), then the .glm53-fp8-synced marker the fan-out writes.
+  # The atomic marker is authoritative because it is written only after a complete manifest
+  # verification. Downloader metadata is a fallback for snapshots fetched before that scheme.
   if [ -z "${MODEL_REV:-}" ]; then
     row "$host" "model revision" SKIP \
       "MODEL_REV empty (cluster.env, $VERSIONS_SRC): the card's HEAD is served — the fingerprint row is the identity"
-  elif [ -n "$(pv model_commit)" ]; then
-    v=$(pv model_commit); rc=1; [ "$v" = "$MODEL_REV" ] && rc=0
-    verdict "$host" "model revision" $rc "hf metadata commit $v (MODEL_REV=$MODEL_REV)"
   else
     v=$(pv model_marker)
     case "$v" in
-      "$MODEL_REV") row "$host" "model revision" PASS ".glm53-fp8-synced = $MODEL_REV" ;;
-      "")          row "$host" "model revision" WARN "MODEL_REV=$MODEL_REV, no hf metadata and no .glm53-fp8-synced marker here" ;;
-      HEAD)        row "$host" "model revision" WARN "marker holds 'HEAD': the fan-out predates the MODEL_REV=$MODEL_REV pin — the weights fingerprint row is the identity, FORCE_SYNC=1 realigns the marker" ;;
+      "$MODEL_REV") row "$host" "model revision" PASS ".glm53-fp8-synced = $MODEL_REV (written after manifest verification)" ;;
+      "")
+        if [ -n "$(pv model_commit)" ]; then
+          v=$(pv model_commit); rc=1; [ "$v" = "$MODEL_REV" ] && rc=0
+          verdict "$host" "model revision" $rc "legacy hf metadata commit $v (MODEL_REV=$MODEL_REV; run fetch to create verified marker)"
+        else
+          row "$host" "model revision" WARN "MODEL_REV=$MODEL_REV, no verified marker or hf metadata"
+        fi ;;
       *)           row "$host" "model revision" FAIL "marker holds '$v', MODEL_REV=$MODEL_REV (re-fetch with FORCE_SYNC=1)" ;;
     esac
   fi
 
-  # The drafter is fetched by hand (docs/weights.md § 3): the only record of its revision is
+  v=$(pv template_sha)
+  if [ -z "$MODEL_TEMPLATE_SHA" ]; then
+    row "$host" "chat template" SKIP "MODEL_REV is not pinned; no release hash to compare"
+  else
+    rc=1; [ "$v" = "$MODEL_TEMPLATE_SHA" ] && rc=0
+    verdict "$host" "chat template" $rc \
+      "sha256 ${v:-absent} (expected $MODEL_TEMPLATE_SHA from ${MODEL_MANIFEST#$REPO/})"
+  fi
+
+  if [ "$FULL_MODEL" = 1 ]; then
+    if [ -z "$MODEL_MANIFEST" ]; then
+      row "$host" "model manifest" SKIP "MODEL_REV is not pinned"
+    else
+      out=$(bounded "$MODEL_VERIFY_TIMEOUT" ssh "${SSH_OPTS[@]}" "$host" \
+        "python3 \$HOME/tp4/scripts/model_manifest.py verify \$HOME/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR" 2>&1) \
+        && rc=0 || rc=$?
+      verdict "$host" "model manifest" $rc \
+        "$([ "$rc" = 0 ] && echo "$out · full SHA-256" || echo "exit $rc: ${out:-no output}")"
+    fi
+  fi
+
+  # The drafter is fetched separately (docs/install-from-zero.md): its revision is
   # the same downloader metadata, again on the node that ran the download.
   w=$(pv draft_sha)
   if [ -z "${DRAFT_REV:-}" ]; then
@@ -539,7 +633,7 @@ elif [ "$QUICK" = 1 ]; then
 else
   # tp4ctl fabric-check: 8-way jumbo ping. Its output carries fabric addresses, so only the
   # counters are reported here.
-  out=$("$REPO/tp4ctl" fabric-check 2>&1) && rc=0 || rc=$?
+  out=$("$REPO/scripts/tp4ctl" fabric-check 2>&1) && rc=0 || rc=$?
   ok=$(printf '%s\n' "$out" | grep -c '  OK   ' || true)
   bad=$(printf '%s\n' "$out" | grep -c '  FAIL ' || true)
   verdict cluster "tp4ctl fabric-check" "$rc" "$ok/8 jumbo directions OK, $bad FAIL"

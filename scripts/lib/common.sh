@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # common.sh — helpers shared by the WORKSTATION-side scripts of this repo: scripts/*.sh,
-# scripts/bench/*.sh and node/nccl/*.sh. It is SOURCED, never executed.
+# scripts/bench/*.sh and scripts/node/nccl/*.sh. It is SOURCED, never executed.
 #
-# It is deliberately NOT used by anything that RUNS ON A NODE: tp4ctl (deploy.sh copies it
-# to ~/tp4/tp4ctl and tp4-autostart.service runs it there), launcher/launch-glm53-tp4.sh,
-# node/flusher-unconditional.sh, node/nccl-bench/entry.sh, node/host/*.sh, node/etc/**.
-# deploy.sh and deploy-host.sh copy those files to the nodes ONE BY ONE, so they must stay
-# self-contained. Never source this file from them.
+# Most node-side runtime files stay self-contained. The operator-run
+# fetch-fp8-weights.sh is the exception: deploy.sh installs it together with this library
+# under ~/tp4/scripts. The controller, launcher, flusher, host and /etc assets never source it.
 #
 # Contract: set TP4_LOG_TAG (e.g. TP4_LOG_TAG='[deploy]') BEFORE sourcing, so log/warn/die
 # carry that script's own prefix. Callers that need a different exit code (bootstrap-node.sh)
@@ -38,11 +36,16 @@ TP4_SSH_OPTS_STRICT=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTim
 
 # Verified ASUS Ascent GX10 hardware profile. cluster.env may set the corresponding scalar
 # for another homogeneous four-node deployment, or a four-element *_BY_RANK array for a
-# heterogeneous one. Keep the node-side copy in launcher/launch-glm53-tp4.sh in sync.
+# heterogeneous one. Keep the node-side copy in scripts/launcher/launch-glm53-tp4.sh in sync.
+# shellcheck disable=SC2034  # exported API: consumed by scripts that source this library
 TP4_DEFAULT_MGMT_IF=enP7s7
+# shellcheck disable=SC2034
 TP4_DEFAULT_FABRIC_IFACES="enp1s0f0np0 enp1s0f1np1 enP2p1s0f0np0 enP2p1s0f1np1"
+# shellcheck disable=SC2034
 TP4_DEFAULT_NCCL_IB_HCA="rocep1s0f0,rocep1s0f1"
+# shellcheck disable=SC2034
 TP4_DEFAULT_NCCL_IB_GID_INDEX=3
+# shellcheck disable=SC2034
 TP4_DEFAULT_NETPLAN_RENDERER=NetworkManager
 TP4_RANK_OVERRIDE_KEYS="MGMT_IF_BY_RANK FABRIC_IFACES_BY_RANK NCCL_IB_HCA_BY_RANK NCCL_IB_GID_INDEX_BY_RANK NETPLAN_RENDERER_BY_RANK"
 
@@ -63,7 +66,7 @@ tp4_rank_config_problems() {
     _tp4_i=0
     while [ "$_tp4_i" -lt "$_tp4_n" ]; do
       eval "_tp4_value=\${${_tp4_name}[$_tp4_i]-}"
-      [ -n "$_tp4_value" ] || _tp4_probs="$_tp4_probs; $_tp4_name[$_tp4_i] is empty"
+      [ -n "$_tp4_value" ] || _tp4_probs="$_tp4_probs; ${_tp4_name}[$_tp4_i] is empty"
       _tp4_i=$((_tp4_i + 1))
     done
   done
@@ -88,7 +91,7 @@ tp4_resolve_rank_value() {
     if [ "$_tp4_n" -gt 0 ]; then
       [ "$_tp4_n" -eq 4 ] || die "cluster.env: $_tp4_array has $_tp4_n entries, expected exactly 4"
       eval "_tp4_value=\${${_tp4_array}[$_tp4_rank]-}"
-      [ -n "$_tp4_value" ] || die "cluster.env: $_tp4_array[$_tp4_rank] is empty"
+      [ -n "$_tp4_value" ] || die "cluster.env: ${_tp4_array}[$_tp4_rank] is empty"
       printf '%s' "$_tp4_value"
       return 0
     fi
@@ -112,7 +115,7 @@ tp4_timeout_bin() {
 # Deliberately NOT listed, because the production recipe leaves them legitimately empty:
 #   MODEL_REV  SPEC_EXTRA_JSON  EXTRA_DOCKER_ENV  EXTRA_VLLM_ARGS
 # shellcheck disable=SC2034  # exported knowledge, also read by the callers' own messages
-TP4_REQUIRED_KEYS="NODES MGMT_IPS MASTER_IP MASTER_PORT MGMT_IF API_PORT FABRIC_TARGETS
+TP4_REQUIRED_KEYS="NODES MGMT_IPS MASTER_IP MASTER_PORT API_PORT FABRIC_TARGETS
 RELAY_DEST IMAGE CONTAINER LAUNCHER MODEL_DIR MODEL_REPO DRAFT_DIR PATCH_FILE NCCL_DIR
 CACHE_DIR SERVED_NAME MAX_MODEL_LEN MAX_NUM_SEQS KV_CACHE_DTYPE BATCHED_TOKENS BLOCK_SIZE
 GPU_MEM_UTIL SPEC_TOKENS ASYNC_SCHEDULING"
@@ -125,7 +128,7 @@ TP4_SITE_KEYS="NODES MGMT_IPS MASTER_IP RELAY_DEST"
 
 # tp4_check_env <repo_root> [<keys>]: validates the ALREADY SOURCED recipe. Dies with every
 # problem in one message; returns 0 in silence when the recipe is complete. <keys> defaults to
-# TP4_REQUIRED_KEYS; a caller that only needs one of them (node/nccl/build.sh derives its
+# TP4_REQUIRED_KEYS; a caller that only needs one of them (scripts/node/nccl/build.sh derives its
 # default host from NODES alone) passes just that key, and the topology block below is then
 # skipped because it needs all four keys.
 tp4_check_env() {
@@ -188,12 +191,12 @@ tp4_check_env() {
   [ -z "$_tp4_v" ] || _tp4_probs="$_tp4_probs$_tp4_v"
 
   [ -n "$_tp4_probs" ] || return 0
-  die "cluster.env: ${_tp4_probs#; } — see README § Site configuration"
+  die "cluster.env: ${_tp4_probs#; } — see README § Start here"
 }
 
 # tp4_load_env <repo_root> [--require] [--overlay]
 #   Sources cluster.env — the production recipe, ALWAYS first — and, with --overlay, the
-#   experiment delta named by $TP4_ENV (relative to <repo_root>, see experiments/README.md)
+#   configuration delta named by $TP4_ENV (relative to <repo_root>, see docs/operations.md)
 #   after it, so an experiment only carries the keys it changes.
 #   --require  refuse when cluster.env is absent, and VALIDATE it once it is sourced: every
 #              key of TP4_REQUIRED_KEYS must be non-empty and free of `<...>` placeholders,
@@ -218,7 +221,7 @@ tp4_load_env() {
   done
 
   if [ "$_tp4_require" = 1 ] && [ ! -f "$_tp4_repo/cluster.env" ]; then
-    echo "$TP4_LOG_TAG ERROR: cluster.env missing: copy cluster.env.example and fill it — see README § Site configuration" >&2
+    echo "$TP4_LOG_TAG ERROR: cluster.env missing: copy cluster.env.example and fill it — see README § Start here" >&2
     exit 1
   fi
   # shellcheck source=/dev/null

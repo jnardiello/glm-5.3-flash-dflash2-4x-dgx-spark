@@ -1,6 +1,0 @@
-# Install as /etc/sudoers.d/99-tp4-nopasswd on every node (mode 0440, validate with
-# visudo -c). tp4ctl and the launcher run every remote command through sudo (docker,
-# sysctl, tee /proc/sys/vm/drop_caches, systemd-run, poweroff), so passwordless sudo is
-# a runtime dependency, not just an autostart one.
-# The real file lives at node/etc/common/99-tp4-nopasswd and is gitignored.
-<USER> ALL=(ALL) NOPASSWD:ALL

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Render the four per-node netplan files node/etc/<alias>/40-cx7.yaml from cluster.env,
+# Render the four per-node netplan files scripts/node/etc/<alias>/40-cx7.yaml from cluster.env,
 # so the ring topology has ONE source (the recipe) and the netplan files are derived.
 #
 # Nothing here talks to a node: it reads cluster.env and writes (or compares) local files.
@@ -10,12 +10,12 @@ set -euo pipefail
 # INPUTS (cluster.env, loaded with --require)
 #   NODES            the four ssh aliases, in rank order 0..3; alias = directory name
 #   FABRIC_TARGETS   per rank, the fabric addresses of that rank's two ring peers
-#   FABRIC_IFACES    optional: the fabric interface names of one node, in the order they
+#   FABRIC_IFACES    optional: homogeneous fabric interface names, in the order they
 #                    are written into the file. The first two are the ADDRESSED ports
 #                    (f0, f1); any further name is rendered as an MTU-only stanza (the
-#                    second PCIe view of the same transceivers). Default = the verified
-#                    ASUS Ascent GX10 names, the same list as the IFACES line of
-#                    node/etc/common/tp4-fabric-iptables.sh.
+#                    second PCIe view of the same transceivers).
+#   FABRIC_IFACES_BY_RANK  optional four-element override array.
+#   NETPLAN_RENDERER / NETPLAN_RENDERER_BY_RANK  homogeneous renderer / per-rank overrides.
 #
 # DERIVATION RULE (reproduces the four private files of this cluster byte for byte,
 # comments aside; the plan itself is documented in docs/fabric.md and scripts/render-netplan.md)
@@ -40,7 +40,7 @@ set -euo pipefail
 # or an entry in an unexpected order.
 #
 # --check is read-only and is the acceptance test: it renders into a temporary directory
-# and compares with the files already under node/etc/, ignoring comment and blank lines.
+# and compares with the files already under scripts/node/etc/, ignoring comment and blank lines.
 # --write overwrites them; the rendered file carries a "generated" header comment that the
 # hand-written ones do not, which is exactly why the comparison ignores comments.
 
@@ -48,13 +48,13 @@ usage() {
   cat <<EOF
 usage: $0 [--check|--write] [--out <dir>]
 
-Renders node/etc/<alias>/40-cx7.yaml for the four ranks from cluster.env.
+Renders scripts/node/etc/<alias>/{40-cx7.yaml,tp4-fabric-iptables.env} for four ranks.
 
   --check        (default) render into a temp dir and compare with the files already in
                  <dir>, ignoring comment and blank lines; writes nothing. Exit 0 only when
                  all four are identical and the implied FABRIC_TARGETS matches cluster.env.
-  --write        write <dir>/<alias>/40-cx7.yaml for the four ranks.
-  --out <dir>    output/comparison directory (default: node/etc of this repo).
+  --write        write both generated files below <dir>/<alias>/ for the four ranks.
+  --out <dir>    output/comparison directory (default: scripts/node/etc of this repo).
   -h, --help     this text.
 EOF
 }
@@ -78,22 +78,33 @@ while [ $# -gt 0 ]; do
 done
 
 tp4_load_env "$REPO" --require
-[ -n "$OUT" ] || OUT="$REPO/node/etc"
-
-# The verified hardware profile (ASUS Ascent GX10): two addressed CX-7 ports plus the two
-# second-PCIe views of the same transceivers, which carry MTU but no address.
-FABRIC_IFACES_DEFAULT="enp1s0f0np0 enp1s0f1np1 enP2p1s0f0np0 enP2p1s0f1np1"
+[ -n "$OUT" ] || OUT="$REPO/scripts/node/etc"
 
 read -r -a ALIASES <<<"$NODES"
-read -r -a IFACE_LIST <<<"${FABRIC_IFACES:-$FABRIC_IFACES_DEFAULT}"
 NNODES=${#ALIASES[@]}
 
 [ "$NNODES" -eq 4 ] \
   || die "this renderer implements the 4-node ring only, NODES has $NNODES entries"
 [ "${#FABRIC_TARGETS[@]}" -eq "$NNODES" ] \
   || die "FABRIC_TARGETS must have one entry per rank ($NNODES)"
-[ "${#IFACE_LIST[@]}" -ge 2 ] \
-  || die "FABRIC_IFACES needs at least the two addressed port names (got: ${IFACE_LIST[*]})"
+
+RANK_IFACES=()
+RANK_RENDERERS=()
+n=0
+while [ "$n" -lt "$NNODES" ]; do
+  RANK_IFACES[n]=$(tp4_resolve_rank_value "$n" FABRIC_IFACES FABRIC_IFACES_BY_RANK "$TP4_DEFAULT_FABRIC_IFACES")
+  RANK_RENDERERS[n]=$(tp4_resolve_rank_value "$n" NETPLAN_RENDERER NETPLAN_RENDERER_BY_RANK "$TP4_DEFAULT_NETPLAN_RENDERER")
+  read -r -a _rank_iface_list <<<"${RANK_IFACES[$n]}"
+  [ "${#_rank_iface_list[@]}" -ge 2 ] \
+    || die "rank $n FABRIC_IFACES needs at least the two addressed port names (got: ${RANK_IFACES[$n]})"
+  for _iface in "${_rank_iface_list[@]}"; do
+    [[ "$_iface" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+      || die "rank $n FABRIC_IFACES contains an unsafe interface name: $_iface"
+  done
+  [[ "${RANK_RENDERERS[$n]}" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || die "rank $n NETPLAN_RENDERER is not a simple renderer name: ${RANK_RENDERERS[$n]}"
+  n=$((n + 1))
+done
 
 # --- split each FABRIC_TARGETS entry into "subnet towards the next rank" / "towards the
 # previous rank", by the peer's node number (last octet = rank + 1) ---
@@ -164,6 +175,8 @@ addr_f1() {
 # render <rank>: the whole 40-cx7.yaml of that rank on stdout.
 render() {
   local n=$1 i lnext lprev
+  local -a IFACE_LIST
+  read -r -a IFACE_LIST <<<"${RANK_IFACES[$n]}"
   lnext=$(link_next "$n")
   lprev=$(link_prev "$n")
   cat <<EOF
@@ -178,7 +191,7 @@ render() {
 # Rule, plan and regeneration: docs/fabric.md, scripts/render-netplan.md.
 network:
   version: 2
-  renderer: NetworkManager
+  renderer: ${RANK_RENDERERS[$n]}
   ethernets:
 EOF
   i=0
@@ -197,6 +210,14 @@ EOF
     fi
     i=$((i + 1))
   done
+}
+
+# Per-rank EnvironmentFile consumed by the generic iptables unit. Interface names were
+# restricted above, so quoting this whitespace-separated list is sufficient and inert.
+render_fabric_env() {
+  local n=$1
+  printf '# GENERATED by scripts/render-netplan.sh from cluster.env — do not edit by hand.\n'
+  printf 'TP4_FABRIC_IFACES="%s"\n' "${RANK_IFACES[$n]}"
 }
 
 # --- the FABRIC_TARGETS block the rendered plan implies, peers by ascending link index ---
@@ -234,15 +255,17 @@ done
 
 # --- render, then write or compare ---
 if [ "$MODE" = write ]; then
+  [ "$targets_rc" -eq 0 ] \
+    || die "cluster.env FABRIC_TARGETS differs from the rendered plan; refusing to write"
   n=0
   while [ "$n" -lt "$NNODES" ]; do
     dir="$OUT/${ALIASES[$n]}"
     mkdir -p "$dir"
     render "$n" >"$dir/40-cx7.yaml"
-    log "wrote $dir/40-cx7.yaml"
+    render_fabric_env "$n" >"$dir/tp4-fabric-iptables.env"
+    log "wrote $dir/{40-cx7.yaml,tp4-fabric-iptables.env}"
     n=$((n + 1))
   done
-  [ "$targets_rc" -eq 0 ] || warn "cluster.env FABRIC_TARGETS differs from the rendered plan (see above)"
   exit 0
 fi
 
@@ -253,6 +276,7 @@ trap 'rm -rf "$TMPDIR_RENDER"' EXIT
 significant() { sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$1"; }
 
 same=0
+env_same=0
 n=0
 while [ "$n" -lt "$NNODES" ]; do
   have="$OUT/${ALIASES[$n]}/40-cx7.yaml"
@@ -267,9 +291,22 @@ while [ "$n" -lt "$NNODES" ]; do
     warn "  rank $n  ${ALIASES[$n]}  DIFFERS (- on-disk, + rendered):"
     sed -e 's/^/    /' "$TMPDIR_RENDER/${ALIASES[$n]}.diff" >&2
   fi
+  have_env="$OUT/${ALIASES[$n]}/tp4-fabric-iptables.env"
+  want_env="$TMPDIR_RENDER/${ALIASES[$n]}.fabric.env"
+  render_fabric_env "$n" >"$want_env"
+  if [ ! -f "$have_env" ]; then
+    warn "  rank $n  ${ALIASES[$n]}  MISSING  ($have_env)"
+  elif diff -u "$have_env" "$want_env" >"$TMPDIR_RENDER/${ALIASES[$n]}.fabric.diff"; then
+    log "  rank $n  ${ALIASES[$n]}  fabric env identical"
+    env_same=$((env_same + 1))
+  else
+    warn "  rank $n  ${ALIASES[$n]}  fabric env DIFFERS (- on-disk, + rendered):"
+    sed -e 's/^/    /' "$TMPDIR_RENDER/${ALIASES[$n]}.fabric.diff" >&2
+  fi
   n=$((n + 1))
 done
 
-log "$same/$NNODES identical"
-[ "$same" -eq "$NNODES" ] || die "the rendered plan does not match the files under $OUT"
+log "$same/$NNODES netplans and $env_same/$NNODES fabric env files identical"
+[ "$same" -eq "$NNODES" ] && [ "$env_same" -eq "$NNODES" ] \
+  || die "the rendered plan does not match the files under $OUT"
 [ "$targets_rc" -eq 0 ] || die "cluster.env FABRIC_TARGETS differs from the rendered plan (see above)"

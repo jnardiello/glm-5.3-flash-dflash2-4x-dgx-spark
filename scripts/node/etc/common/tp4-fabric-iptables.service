@@ -1,0 +1,13 @@
+[Unit]
+Description=TP4 RoCE fabric DOCKER-USER allow rules
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/tp4-fabric-iptables
+ExecStart=/usr/local/sbin/tp4-fabric-iptables.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

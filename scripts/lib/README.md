@@ -1,42 +1,19 @@
-# scripts/lib
+# Shared shell helpers
 
-Shell helpers shared by the **workstation-side** scripts: `scripts/*.sh`,
-`scripts/bench/{run_ab.sh,thermal-snapshot.sh}` and `node/nccl/*.sh`. Sourced, never
-executed. The other bench scripts under `scripts/bench/` are Python and do not use it.
+`common.sh` is sourced by workstation-side scripts. It provides:
 
-`common.sh` holds what every one of them used to repeat: the `cluster.env` +
-`$TP4_ENV` overlay loader (`tp4_load_env`), the two ssh option sets
-(`TP4_SSH_OPTS`, `TP4_SSH_OPTS_STRICT`), the `timeout`/`gtimeout` probe
-(`tp4_timeout_bin`), the per-rank hardware resolver (`tp4_resolve_rank_value`) and
-`log`/`warn`/`die`. Each caller sets `TP4_LOG_TAG`
-before sourcing, so the messages keep that script's own prefix.
+- `cluster.env` plus optional `TP4_ENV` loading and validation;
+- common SSH option arrays and the `timeout`/`gtimeout` probe;
+- per-rank scalar/`*_BY_RANK` resolution;
+- consistent `log`, `warn`, and `die` functions.
 
-`tp4_load_env --require` also VALIDATES the recipe once it is sourced: every key of
-`TP4_REQUIRED_KEYS` must be non-empty and free of `<...>` placeholders, every key of
-`TP4_SITE_KEYS` (`NODES`, `MGMT_IPS`, `MASTER_IP`, `RELAY_DEST`) must no longer hold the
-dummy value `cluster.env.example` ships, and the three POSITIONAL topology lists (`NODES`,
-`MGMT_IPS`, `FABRIC_TARGETS`) must each hold exactly four entries with `MASTER_IP` equal to
-`MGMT_IPS[0]` — a shorter or longer list silently gives a rank another rank's address. All
-the failures come out in one message. Both key lists are hard-coded in `common.sh` and must
-be kept in sync with `cluster.env.example`.
+Validation rejects missing keys, placeholders, unchanged example site values, wrong
+four-rank cardinality, `MASTER_IP` differing from rank 0, and malformed per-rank
+arrays. Callers set `TP4_LOG_TAG` before sourcing the file.
 
-The verified ASUS hardware values are scalar fallbacks. A homogeneous deployment can set
-`MGMT_IF`, `FABRIC_IFACES`, `NCCL_IB_HCA`, `NCCL_IB_GID_INDEX` and
-`NETPLAN_RENDERER`; a heterogeneous deployment can instead provide the corresponding
-four-element `*_BY_RANK` arrays. An array, when non-empty, wins over its scalar and must
-contain exactly four non-empty entries. `tp4_validate_rank_config` enforces this contract;
-`tp4_load_env --require` invokes the same validation as part of `tp4_check_env`.
+Do not source this library from files deployed as self-contained node entry points.
+`tp4ctl`, the launcher, flusher, autostart target, and host scripts carry their own
+minimal guards because they may run without `~/tp4/scripts/lib/common.sh`.
 
-The validation is also callable on its own as `tp4_check_env <repo> [<keys>]`, with `<keys>`
-defaulting to `TP4_REQUIRED_KEYS`: `node/nccl/build.sh` passes just `NODES`, the only key it
-reads (for its default build host), and the cardinality block is then skipped.
-
-`tp4ctl` and `launcher/launch-glm53-tp4.sh` cannot use this — they run on the nodes — and
-carry a smaller inline equivalent of their own (placeholder, empty, dummy values, plus the
-same 4-entry / `MASTER_IP == MGMT_IPS[0]` cardinality guard).
-
-**Never source this from a file that runs on a node.** `scripts/deploy.sh` and
-`scripts/deploy-host.sh` copy `tp4ctl`, `launcher/launch-glm53-tp4.sh`,
-`node/flusher-unconditional.sh`, `node/nccl-bench/entry.sh` and `node/host/*.sh`
-to the nodes one file at a time, and `node/tp4-autostart.service.example` runs
-`~/tp4/tp4ctl up` there: those files must stay self-contained.
+Configuration and overlay rules are in
+[`docs/operations.md`](../../docs/operations.md).

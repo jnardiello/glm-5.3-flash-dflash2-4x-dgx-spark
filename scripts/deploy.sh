@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy cluster.env, the launcher, tp4ctl, the flusher and the indexer patch to all
+# Deploy cluster.env, runtime assets and the pinned model fetch/manifest tooling to all
 # NODES. Idempotent: it always recopies and verifies the source<->destination sha256.
-# With TP4_ENV=<relative path> the experiment overlay is pushed too, at the same relative
-# path under ~/tp4/ (see experiments/README.md). Host assets (sysctl, grub, host scripts)
+# With TP4_ENV=<relative path> the configuration overlay is pushed too, at the same
+# relative path under ~/tp4/ (see docs/operations.md). Host assets (sysctl, grub, host scripts)
 # are NOT handled here: scripts/deploy-host.sh does that.
 #
 # usage:
@@ -26,10 +26,10 @@ $USAGE
                    exec bit of every managed file ("STATE  <node>  <path>"). No scp, no chmod.
   --host <alias>   push to (or check) one node of NODES/TP4_HOSTS only
 
-Managed files: cluster.env, launcher/launch-glm53-tp4.sh, tp4ctl, the flusher, the
-indexer patch and node/patches/*.py (minus test_*.py) -> ~/patches, node/moe-configs/*.json,
-node/nccl-bench/, node/moe-tune/{run-tune.sh,benchmark_moe_noray.py,merge-configs.py},
-plus the TP4_ENV overlay when set. Host assets: scripts/deploy-host.sh.
+Managed files: cluster.env, scripts/launcher/launch-glm53-tp4.sh, scripts/tp4ctl, the flusher,
+model fetch/helper/manifests, the indexer patch, scripts/node/patches/*.py (minus tests),
+scripts/node/moe-configs/*.json, and the TP4_ENV overlay when set. Optional operator-only
+benchmark/tuner assets are copied only when present. Host assets: scripts/deploy-host.sh.
 EOF
 }
 # --help must work in a checkout that has no cluster.env yet.
@@ -77,24 +77,38 @@ fi
 # source file -> path relative to $HOME on the node
 FILES=(
   "cluster.env:tp4/cluster.env"
-  "launcher/launch-glm53-tp4.sh:tp4/launch-glm53-tp4.sh"
-  "tp4ctl:tp4/tp4ctl"
-  "node/flusher-unconditional.sh:tp4/flusher-unconditional.sh"
-  "node/sparse_attn_indexer_kpool_sm121.py:patches/sparse_attn_indexer_kpool.py"
+  "scripts/launcher/launch-glm53-tp4.sh:tp4/launch-glm53-tp4.sh"
+  "scripts/tp4ctl:tp4/tp4ctl"
+  "scripts/node/flusher-unconditional.sh:tp4/flusher-unconditional.sh"
+  "scripts/node/sparse_attn_indexer_kpool_sm121.py:patches/sparse_attn_indexer_kpool.py"
+  "scripts/fetch-fp8-weights.sh:tp4/scripts/fetch-fp8-weights.sh"
+  "scripts/model_manifest.py:tp4/scripts/model_manifest.py"
+  "scripts/render_chat_template.py:tp4/scripts/render_chat_template.py"
+  "scripts/lib/common.sh:tp4/scripts/lib/common.sh"
 )
-EXECUTABLES="tp4/launch-glm53-tp4.sh tp4/tp4ctl tp4/flusher-unconditional.sh"
-SHELL_SCRIPTS="tp4/launch-glm53-tp4.sh tp4/tp4ctl tp4/flusher-unconditional.sh"
+EXECUTABLES="tp4/launch-glm53-tp4.sh tp4/tp4ctl tp4/flusher-unconditional.sh tp4/scripts/fetch-fp8-weights.sh tp4/scripts/model_manifest.py"
+SHELL_SCRIPTS="tp4/launch-glm53-tp4.sh tp4/tp4ctl tp4/flusher-unconditional.sh tp4/scripts/fetch-fp8-weights.sh tp4/scripts/lib/common.sh"
 
 # Extra remote directories to create before scp (relative to $HOME).
-REMOTE_DIRS=(tp4 patches)
+REMOTE_DIRS=(tp4 patches tp4/scripts tp4/scripts/lib tp4/node/model-manifests)
 
-# Python patches for the container (node/patches/README.md): pushed next to the indexer
+# Complete immutable release manifests. Both the current and rollback revisions stay
+# available on the nodes so fetch and full verification never consult a moving URL.
+manifest_count=0
+for f in "$REPO"/scripts/node/model-manifests/*.json; do
+  [ -f "$f" ] || continue
+  FILES+=("scripts/node/model-manifests/${f##*/}:tp4/node/model-manifests/${f##*/}")
+  manifest_count=$((manifest_count + 1))
+done
+[ "$manifest_count" -gt 0 ] || { warn "no model release manifests found"; exit 1; }
+
+# Python patches for the container (scripts/node/patches/README.md): pushed next to the indexer
 # patch. Every .py in FILES is ast.parsed below, so a syntax error never reaches a node.
 patch_count=0
-for f in "$REPO"/node/patches/*.py; do
+for f in "$REPO"/scripts/node/patches/*.py; do
   [ -f "$f" ] || continue
   case ${f##*/} in test_*) continue ;; esac   # unit tests stay on the workstation
-  FILES+=("node/patches/${f##*/}:patches/${f##*/}")
+  FILES+=("scripts/node/patches/${f##*/}:patches/${f##*/}")
   patch_count=$((patch_count + 1))
 done
 
@@ -110,17 +124,16 @@ fi
 
 # Fused-MoE tuning configs, when the directory carries any.
 moe_count=0
-if [ -d "$REPO/node/moe-configs" ]; then
-  for f in "$REPO"/node/moe-configs/*.json; do
+if [ -d "$REPO/scripts/node/moe-configs" ]; then
+  for f in "$REPO"/scripts/node/moe-configs/*.json; do
     [ -f "$f" ] || continue
-    FILES+=("node/moe-configs/${f##*/}:tp4/moe-configs/${f##*/}")
+    FILES+=("scripts/node/moe-configs/${f##*/}:tp4/moe-configs/${f##*/}")
     moe_count=$((moe_count + 1))
   done
   [ "$moe_count" -eq 0 ] || REMOTE_DIRS+=(tp4/moe-configs)
 fi
 
-# NCCL microbenchmark assets, when the directory carries any. Inert unless an overlay
-# mounts them (experiments/2026-09-04-ncclbench.env) — see node/nccl-bench/README.md.
+# Optional NCCL microbenchmark assets, when the local directory carries any.
 # Explicit list, not a bare glob: only the runtime assets belong on the nodes. README.md,
 # editor leftovers and __pycache__/ stay in the repo.
 nccl_count=0
@@ -138,12 +151,12 @@ for f in "$REPO"/node/nccl-bench/*.py; do
 done
 [ "$nccl_count" -eq 0 ] || REMOTE_DIRS+=(tp4/nccl-bench)
 
-# fused-MoE tuning driver (node/moe-tune/README.md). Explicit list, not a glob: only the
+# Optional fused-MoE tuning driver. Explicit list, not a glob: only the
 # three files the node actually runs. vendor/benchmark_moe.py is the verbatim upstream reference
 # and stays on the workstation, like README.md and __pycache__/.
 moetune_count=0
 for f in run-tune.sh benchmark_moe_noray.py merge-configs.py; do
-  [ -f "$REPO/node/moe-tune/$f" ] || { warn "node/moe-tune/$f: absent, not pushed"; continue; }
+  [ -f "$REPO/node/moe-tune/$f" ] || continue
   FILES+=("node/moe-tune/$f:tp4/moe-tune/$f")
   moetune_count=$((moetune_count + 1))
 done
@@ -161,7 +174,7 @@ sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 # Nothing is copied before the whole list is known-good: a source that disappeared would
 # otherwise abort the run mid-node (sha_of on a missing file, `set -o pipefail`), and a
 # .py with a syntax error would reach the container. This covers EVERY .py that travels:
-# node/patches/, node/nccl-bench/, node/moe-tune/ and the indexer patch.
+# public scripts/node/patches/, optional node/nccl-bench/ and node/moe-tune/, and the indexer patch.
 for entry in "${FILES[@]}"; do
   src=${entry%%:*}
   [ -f "$REPO/$src" ] || { warn "source missing, refusing to run: $REPO/$src"; exit 1; }
@@ -280,21 +293,18 @@ done
 
 log "--- summary ---"
 log "recipe: cluster.env${TP4_ENV:+ + overlay $TP4_ENV -> ~/tp4/$TP4_ENV}"
+log "model manifests: $manifest_count release(s) + fetch/integrity helper -> ~/tp4/"
 log "patches: $patch_count runtime file(s) -> ~/patches/ (test_*.py not pushed)"
 if [ "$moe_count" -gt 0 ]; then
   log "moe-configs: $moe_count file(s) -> ~/tp4/moe-configs/"
 else
-  log "moe-configs: none in node/moe-configs (nothing pushed)"
+  log "moe-configs: none in scripts/node/moe-configs (nothing pushed)"
 fi
 if [ "$nccl_count" -gt 0 ]; then
   log "nccl-bench: $nccl_count file(s) -> ~/tp4/nccl-bench/"
-else
-  log "nccl-bench: none in node/nccl-bench (nothing pushed)"
 fi
 if [ "$moetune_count" -gt 0 ]; then
   log "moe-tune: $moetune_count file(s) -> ~/tp4/moe-tune/ (vendor/benchmark_moe.py is reference only)"
-else
-  log "moe-tune: none in node/moe-tune (nothing pushed)"
 fi
 
 if [ $rc -eq 0 ]; then

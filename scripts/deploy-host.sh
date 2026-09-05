@@ -10,7 +10,7 @@ set -euo pipefail
 # tp4-iommu.sh --revert) is present on a node is NOT re-pushed to that node: the push
 # prints SKIP instead. `tp4-iommu.sh --apply` removes the sentinel.
 #
-# ROLLBACK RULE: every host script under node/host/ takes --apply and --revert, and
+# ROLLBACK RULE: every public host script under scripts/node/host/ takes --apply and --revert, and
 # --revert is the only supported way back. Whatever you push with `--run <script>
 # --apply` must be undoable with `--run <script> --revert` from this same script; grub
 # drop-ins additionally need an owner-driven `update-grub` + reboot, which this script
@@ -29,6 +29,7 @@ set -euo pipefail
 #   scripts/deploy-host.sh --run <script-basename> --apply   # push, then apply on all nodes
 #   scripts/deploy-host.sh --run <script-basename> --revert  # push, then revert on all nodes
 #   scripts/deploy-host.sh --no-push --run <s> --revert      # run only, no re-push
+#   scripts/deploy-host.sh --no-push --run tp4-iommu.sh --status  # read-only, no re-push
 #
 # --check compares, per node, the sha256 (and mode/owner) of every file this script
 # manages — host scripts, the /etc set, the grub drop-ins — against the repo source or the
@@ -63,7 +64,7 @@ set -euo pipefail
 #
 # TP4_ENV=<relative path> sources an experiment overlay after cluster.env (for NODES).
 
-USAGE="usage: $0 [-h] [--check] [--etc|--no-etc] [--host <alias>] [--no-push] [--run <script-basename> --apply|--revert]"
+USAGE="usage: $0 [-h] [--check] [--etc|--no-etc] [--host <alias>] [--no-push] [--run <script-basename> --apply|--revert|--status]"
 usage() {
   cat <<EOF
 $USAGE
@@ -75,13 +76,15 @@ $USAGE
   --host <alias>   restrict EVERY phase (push, /etc, run and the partial-apply rollback)
                    to one node of NODES/TP4_HOSTS
   --no-push        skip the push phase (requires --run)
-  --run <s.sh> --apply|--revert
-                   run node/host/<s.sh> on every selected node whose push succeeded
+  --run <s.sh> --apply|--revert|--status
+                   run scripts/node/host/<s.sh> on every selected node whose push succeeded
+                   (--status is read-only, requires --no-push, and supports only
+                   tp4-iommu.sh; other host-script status paths may mutate local state)
 
-Managed files: node/host/*.sh -> ~/tp4/host/, node/etc/common/{98-tp4-fabric.conf,
+Managed files: scripts/node/host/*.sh -> ~/tp4/host/, scripts/node/etc/common/{98-tp4-fabric.conf,
 99-tp4-vm.conf,tp4-fabric-iptables.sh,tp4-fabric-iptables.service}, the per-node netplan
-node/etc/<alias>/40-cx7.yaml, /etc/sudoers.d/99-tp4-nopasswd rendered from
-node/etc/common/99-tp4-nopasswd.example, and node/etc/default/grub.d/*.cfg.
+scripts/node/etc/<alias>/{40-cx7.yaml,tp4-fabric-iptables.env}, /etc/sudoers.d/99-tp4-nopasswd rendered from
+scripts/node/etc/common/99-tp4-nopasswd.example, and scripts/node/etc/default/grub.d/*.cfg.
 Installing is not activating: no netplan apply, no sysctl --system, no systemctl here.
 EOF
 }
@@ -110,9 +113,9 @@ while [ $# -gt 0 ]; do
     --no-etc) ETC=0; shift ;;
     --check)  CHECK=1; shift ;;
     --host)   [ $# -ge 2 ] || { echo "--host needs a node alias" >&2; exit 2; }; ONE_HOST=$2; shift 2 ;;
-    --apply|--revert)
+    --apply|--revert|--status)
       if [ -n "$RUN_MODE" ] && [ "$RUN_MODE" != "$1" ]; then
-        echo "--apply and --revert are mutually exclusive" >&2; exit 2
+        echo "--apply, --revert and --status are mutually exclusive" >&2; exit 2
       fi
       RUN_MODE=$1; shift ;;
     *)        echo "$USAGE" >&2; exit 2 ;;
@@ -125,10 +128,13 @@ if [ "$NO_PUSH" = 1 ] && [ -z "$RUN_SCRIPT" ]; then
   echo "--no-push requires --run <script-basename>" >&2; exit 2
 fi
 if [ -n "$RUN_SCRIPT" ] && [ -z "$RUN_MODE" ]; then
-  echo "--run requires --apply or --revert" >&2; exit 2
+  echo "--run requires --apply, --revert or --status" >&2; exit 2
 fi
 if [ -z "$RUN_SCRIPT" ] && [ -n "$RUN_MODE" ]; then
   echo "$RUN_MODE requires --run <script-basename>" >&2; exit 2
+fi
+if [ "$RUN_MODE" = --status ] && [ "$NO_PUSH" != 1 ]; then
+  echo "--status is read-only and requires --no-push" >&2; exit 2
 fi
 
 if [ -n "$RUN_SCRIPT" ]; then
@@ -138,17 +144,27 @@ if [ -n "$RUN_SCRIPT" ]; then
   case "$RUN_SCRIPT" in
     *..*) echo "[deploy-host] ERROR: --run must not contain '..' (got: $RUN_SCRIPT)" >&2; exit 2 ;;
   esac
-  [ -f "$REPO/node/host/$RUN_SCRIPT" ] \
-    || { echo "[deploy-host] ERROR: --run $RUN_SCRIPT: node/host/$RUN_SCRIPT does not exist" >&2; exit 1; }
+  if [ ! -f "$REPO/scripts/node/host/$RUN_SCRIPT" ]; then
+    [ "$RUN_SCRIPT" = nsys-entry.sh ] && [ -f "$REPO/node/host/nsys-entry.sh" ] \
+      || { echo "[deploy-host] ERROR: --run $RUN_SCRIPT: scripts/node/host/$RUN_SCRIPT does not exist" >&2; exit 1; }
+  fi
+  if [ "$RUN_MODE" = --status ] && [ "$RUN_SCRIPT" != tp4-iommu.sh ]; then
+    echo "[deploy-host] ERROR: --status supports only tp4-iommu.sh; $RUN_SCRIPT may mutate host state while reporting status" >&2
+    exit 2
+  fi
 fi
 
 read -r -a HOSTS <<<"${TP4_HOSTS:-$NODES}"
-SSH_OPTS=("${TP4_SSH_OPTS[@]}")
+if [ "$RUN_MODE" = --status ]; then
+  SSH_OPTS=("${TP4_SSH_OPTS_STRICT[@]}")
+else
+  SSH_OPTS=("${TP4_SSH_OPTS[@]}")
+fi
 
 sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 
 # A host entry can be a plain alias (NODES) or user@address (TP4_HOSTS). The alias names
-# the per-node directory under node/etc/ and is what the tables print, so a TP4_HOSTS
+# the per-node directory under scripts/node/etc/ and is what the tables print, so a TP4_HOSTS
 # connection string is mapped back to the NODES alias at the same position (rank order).
 # Without that correspondence the alias falls back to the connection string, and per-node
 # assets (the netplan) then need alias-style hosts: this is reported once, not guessed.
@@ -231,17 +247,21 @@ fail() { rc=1; push_rc=1; }
 
 # --- inventory: only what actually exists in the repo --------------------------------
 HOST_SCRIPTS=()
-for f in "$REPO"/node/host/*.sh; do
+for f in "$REPO"/scripts/node/host/*.sh; do
   if [ -f "$f" ]; then HOST_SCRIPTS+=("$f"); fi
 done
+# Preserve the optional private profiler entrypoint at its ignored pre-relocation path.
+if [ -f "$REPO/node/host/nsys-entry.sh" ]; then
+  HOST_SCRIPTS+=("$REPO/node/host/nsys-entry.sh")
+fi
 
 # The managed /etc set, identical on every node: "<repo path>|<destination>|<mode>".
 # The two per-node files (netplan, sudoers) are resolved host by host below.
 ETC_COMMON=(
-  "node/etc/common/98-tp4-fabric.conf|/etc/sysctl.d/98-tp4-fabric.conf|0644"
-  "node/etc/common/99-tp4-vm.conf|/etc/sysctl.d/99-tp4-vm.conf|0644"
-  "node/etc/common/tp4-fabric-iptables.sh|/usr/local/sbin/tp4-fabric-iptables.sh|0755"
-  "node/etc/common/tp4-fabric-iptables.service|/etc/systemd/system/tp4-fabric-iptables.service|0644"
+  "scripts/node/etc/common/98-tp4-fabric.conf|/etc/sysctl.d/98-tp4-fabric.conf|0644"
+  "scripts/node/etc/common/99-tp4-vm.conf|/etc/sysctl.d/99-tp4-vm.conf|0644"
+  "scripts/node/etc/common/tp4-fabric-iptables.sh|/usr/local/sbin/tp4-fabric-iptables.sh|0755"
+  "scripts/node/etc/common/tp4-fabric-iptables.service|/etc/systemd/system/tp4-fabric-iptables.service|0644"
 )
 ETC_SET=()
 for entry in "${ETC_COMMON[@]}"; do
@@ -253,12 +273,12 @@ for entry in "${ETC_COMMON[@]}"; do
 done
 
 GRUB_FILES=()
-for f in "$REPO"/node/etc/default/grub.d/*.cfg; do
+for f in "$REPO"/scripts/node/etc/default/grub.d/*.cfg; do
   if [ -f "$f" ]; then GRUB_FILES+=("$f"); fi
 done
 
-[ "${#HOST_SCRIPTS[@]}" -gt 0 ] || log "node/host/*.sh: no file, nothing to push in this category"
-[ "${#GRUB_FILES[@]}" -gt 0 ]   || log "node/etc/default/grub.d/*.cfg: no file, nothing to push in this category"
+[ "${#HOST_SCRIPTS[@]}" -gt 0 ] || log "scripts/node/host/*.sh: no file, nothing to push in this category"
+[ "${#GRUB_FILES[@]}" -gt 0 ]   || log "scripts/node/etc/default/grub.d/*.cfg: no file, nothing to push in this category"
 [ "$ETC" = 1 ]                  || log "--no-etc: the /etc set and the grub drop-ins are left untouched"
 
 # --- per-node /etc sources -------------------------------------------------------------
@@ -271,31 +291,46 @@ netplan_src() {   # $1 host
   local alias src
   NETPLAN_SRC=""
   alias=$(host_alias "$1")
-  src="$REPO/node/etc/$alias/40-cx7.yaml"
+  src="$REPO/scripts/node/etc/$alias/40-cx7.yaml"
   if [ ! -f "$src" ]; then
     state SKIP "$1" /etc/netplan/40-cx7.yaml \
-      "node/etc/$alias/40-cx7.yaml missing, gitignored per-node file: create it from node/etc/40-cx7.yaml.example"
+      "scripts/node/etc/$alias/40-cx7.yaml missing, gitignored per-node file: create it from scripts/node/etc/40-cx7.yaml.example"
     fail
     return 1
   fi
   NETPLAN_SRC=$src
 }
 
+FABRIC_ENV_SRC=""
+fabric_env_src() {   # $1 host
+  local alias src
+  FABRIC_ENV_SRC=""
+  alias=$(host_alias "$1")
+  src="$REPO/scripts/node/etc/$alias/tp4-fabric-iptables.env"
+  if [ ! -f "$src" ]; then
+    state SKIP "$1" /etc/default/tp4-fabric-iptables \
+      "scripts/node/etc/$alias/tp4-fabric-iptables.env missing: run scripts/render-netplan.sh --write"
+    fail
+    return 1
+  fi
+  FABRIC_ENV_SRC=$src
+}
+
 SUDOERS_SRC=""
 sudoers_src() {   # $1 host; renders <USER> from the node's own `whoami`
-  local h=$1 tmpl="$REPO/node/etc/common/99-tp4-nopasswd.example" user out
+  local h=$1 tmpl="$REPO/scripts/node/etc/common/99-tp4-nopasswd.example" user out
   SUDOERS_SRC=""
   if [ ! -f "$tmpl" ]; then
     # No template yet: fall back to the local (gitignored) real file, which is already
     # rendered for this cluster's user.
-    tmpl="$REPO/node/etc/common/99-tp4-nopasswd"
+    tmpl="$REPO/scripts/node/etc/common/99-tp4-nopasswd"
     if [ ! -f "$tmpl" ]; then
       state SKIP "$h" /etc/sudoers.d/99-tp4-nopasswd \
-        "neither node/etc/common/99-tp4-nopasswd.example nor node/etc/common/99-tp4-nopasswd exists"
+        "neither scripts/node/etc/common/99-tp4-nopasswd.example nor its ignored rendered file exists"
       fail
       return 1
     fi
-    warn "$h: 99-tp4-nopasswd.example absent, using node/etc/common/99-tp4-nopasswd as-is (already rendered)"
+    warn "$h: 99-tp4-nopasswd.example absent, using scripts/node/etc/common/99-tp4-nopasswd as-is (already rendered)"
     SUDOERS_SRC=$tmpl
     return 0
   fi
@@ -400,6 +435,7 @@ etc_phase() {
       state SKIP "$host" "${etc_rest%%|*}" "no passwordless sudo"
     done
     state SKIP "$host" /etc/netplan/40-cx7.yaml "no passwordless sudo"
+    state SKIP "$host" /etc/default/tp4-fabric-iptables "no passwordless sudo"
     state SKIP "$host" /etc/sudoers.d/99-tp4-nopasswd "no passwordless sudo"
     fail
     return
@@ -419,12 +455,24 @@ etc_phase() {
     remote_hn=$(ssh -n "${SSH_OPTS[@]}" "$host" 'hostname -s' 2>/dev/null) || remote_hn=""
     if [ "$remote_hn" != "$(host_hostname "$host")" ]; then
       state IDENTITY-MISMATCH "$host" /etc/netplan/40-cx7.yaml \
-        "node says hostname -s = '$remote_hn', expected '$(host_hostname "$host")' for node/etc/$(host_alias "$host")/40-cx7.yaml — not installed, not compared"
+        "node says hostname -s = '$remote_hn', expected '$(host_hostname "$host")' for scripts/node/etc/$(host_alias "$host")/40-cx7.yaml — not installed, not compared"
       fail
     elif [ "$mode_" = push ]; then
       install_etc "$NETPLAN_SRC" /etc/netplan/40-cx7.yaml 0600
     else
       check_file "$NETPLAN_SRC" /etc/netplan/40-cx7.yaml /etc/netplan/40-cx7.yaml 0600 root
+    fi
+  fi
+  if fabric_env_src "$host"; then
+    remote_hn=$(ssh -n "${SSH_OPTS[@]}" "$host" 'hostname -s' 2>/dev/null) || remote_hn=""
+    if [ "$remote_hn" != "$(host_hostname "$host")" ]; then
+      state IDENTITY-MISMATCH "$host" /etc/default/tp4-fabric-iptables \
+        "node says hostname -s = '$remote_hn', expected '$(host_hostname "$host")' for rank-local fabric interfaces — not installed, not compared"
+      fail
+    elif [ "$mode_" = push ]; then
+      install_etc "$FABRIC_ENV_SRC" /etc/default/tp4-fabric-iptables 0644
+    else
+      check_file "$FABRIC_ENV_SRC" /etc/default/tp4-fabric-iptables /etc/default/tp4-fabric-iptables 0644 root
     fi
   fi
   if sudoers_src "$host"; then
@@ -487,7 +535,7 @@ for host in "${HOSTS[@]}"; do
   for src in ${HOST_SCRIPTS[@]+"${HOST_SCRIPTS[@]}"}; do
     base=${src##*/}
     if ! scp "${SSH_OPTS[@]}" -q "$src" "$host:~/tp4/host/$base"; then
-      warn "$host: scp failed for node/host/$base"; rc=1; push_rc=1; continue
+      warn "$host: scp failed for scripts/node/host/$base"; rc=1; push_rc=1; continue
     fi
     ssh -n "${SSH_OPTS[@]}" "$host" "chmod +x \"\$HOME/tp4/host/$base\"" \
       || { warn "$host: chmod +x failed for $base"; rc=1; push_rc=1; }

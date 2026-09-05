@@ -14,8 +14,8 @@ set -euo pipefail
 #
 # Usage: scripts/fetch-fp8-weights.sh [--dry-run]
 #   --dry-run      print the df/hf/ssh/rsync commands without running them
-#   FORCE_FETCH=1 / REFRESH_WEIGHTS=1     force the download
-#   FORCE_SYNC=1   force the rsync even when the marker is already aligned
+#   FORCE_FETCH=1 / REFRESH_WEIGHTS=1     permit explicit repair of installed head shards
+#   FORCE_SYNC=1   permit explicit repair of installed worker shards
 #   HF_EXCLUDE="pat1,pat2"  patterns for hf download, passed as --exclude (NOT as
 #                  positional arguments: hf would treat them as allow_patterns and
 #                  download 0 files)
@@ -30,10 +30,9 @@ set -euo pipefail
 #                  comes from cluster.env. Automatic fallback to mgmt if the
 #                  reachability probe fails.
 #
-# Idempotent: the download is skipped when the head already holds EXPECTED_SHARDS
-# shards (hf resumes incomplete blobs by itself); the rsync is skipped when the remote
-# marker .glm53-fp8-synced holds the current key (MODEL_REV, or "HEAD" when the card
-# is not pinned — use FORCE_SYNC=1 to re-sync after an upstream refresh).
+# Idempotent: every file is checked against the pinned release manifest. Only missing
+# or mismatched files are downloaded/transferred; markers are updated atomically after
+# the complete snapshot has been verified on every rank.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
@@ -41,9 +40,6 @@ REPO=$(cd "$HERE/.." && pwd)
 TP4_LOG_TAG='[fetch-fp8]'
 # shellcheck source=lib/common.sh
 . "$REPO/scripts/lib/common.sh"
-# --require: an unfilled or half-filled cluster.env must never reach a 306 GiB fan-out.
-tp4_load_env "$REPO" --require
-: "${RELAY_DEST:?set RELAY_DEST in cluster.env}"
 
 DRY_RUN=0
 for arg in "$@"; do
@@ -54,27 +50,38 @@ for arg in "$@"; do
   esac
 done
 
+
+# --require: an unfilled or half-filled cluster.env must never reach a 306 GiB fan-out.
+# Parse first so --help remains usable from a fresh public checkout.
+tp4_load_env "$REPO" --require
+: "${RELAY_DEST:?set RELAY_DEST in cluster.env}"
+
 read -r -a HOSTS <<<"${TP4_HOSTS:-$NODES}"
 SSH_OPTS=("${TP4_SSH_OPTS[@]}")
 
 MODEL_DIR_RAW="$MODEL_DIR"            # literal $HOME, expanded by the remote shell
 MODEL_DIR=$(eval echo "$MODEL_DIR")
-EXPECTED_SHARDS=62
-EXPECTED_GIB=306
-# Disk preflight BEFORE any write: 330 GiB free on the $HOME filesystem (weights
-# ~306 GiB + margin for hf's incomplete blobs).
-DISK_MIN_KB=$((330 * 1024 * 1024))
 MARKER_NAME='.glm53-fp8-synced'
-# Marker key: the revision pinned in cluster.env, otherwise "HEAD".
-MARKER_KEY="${MODEL_REV:-HEAD}"
+MANIFEST_TOOL="$REPO/scripts/model_manifest.py"
+MANIFEST_DIR="$REPO/scripts/node/model-manifests"
+[ -n "${MODEL_REV:-}" ] || die "MODEL_REV must be pinned: an unversioned HEAD has no verifiable release manifest"
+MANIFEST="$MANIFEST_DIR/$MODEL_REV.json"
+[ -r "$MANIFEST_TOOL" ] || die "manifest helper missing: $MANIFEST_TOOL"
+[ -r "$MANIFEST" ] || die "release manifest missing: $MANIFEST"
+MARKER_KEY="$MODEL_REV"
+MANIFEST_REV=$(python3 "$MANIFEST_TOOL" field "$MANIFEST" revision)
+[ "$MANIFEST_REV" = "$MODEL_REV" ] || die "manifest revision $MANIFEST_REV does not match MODEL_REV=$MODEL_REV"
+MANIFEST_REPO=$(python3 "$MANIFEST_TOOL" field "$MANIFEST" repository)
+[ "$MANIFEST_REPO" = "$MODEL_REPO" ] || die "manifest repository $MANIFEST_REPO does not match MODEL_REPO=$MODEL_REPO"
+EXPECTED_SHARDS=$(python3 "$MANIFEST_TOOL" field "$MANIFEST" shard-count)
+EXPECTED_BYTES=$(python3 "$MANIFEST_TOOL" field "$MANIFEST" total-size)
+# The downloader may hold a temporary copy. The fixed margin keeps a fresh install's
+# old ~330 GiB preflight while allowing a metadata-only release to use existing weights.
+DISK_MARGIN_BYTES=${MODEL_DISK_MARGIN_BYTES:-$((24 * 1024 * 1024 * 1024))}
 # What every run states up front, dry or not: which revision of the card it fetches and
 # fans out. DRAFT_REV is deliberately NOT used here — this script downloads the FP8
-# checkpoint only; the DFlash2 drafter is fetched by hand (docs/weights.md § 3).
-if [ -n "${MODEL_REV:-}" ]; then
-  log "revision: $MODEL_REV (MODEL_REV pinned in cluster.env — hf download --revision)"
-else
-  log "revision: HEAD of $MODEL_REPO (MODEL_REV empty in cluster.env: no pin, the card's current commit is fetched)"
-fi
+# checkpoint only; the DFlash2 drafter is fetched separately (docs/install-from-zero.md).
+log "revision: $MODEL_REPO@$MODEL_REV (manifest: ${MANIFEST#$REPO/})"
 
 # rsync data plane: XFER_HOSTS (space-separated, rank order) drives the data copy
 # ONLY; the control plane (marker/mkdir/probe/ssh) ALWAYS stays on HOSTS (mgmt).
@@ -124,18 +131,26 @@ hf_cmd() {
   fi
 }
 
-# ---------------------------------------------------------------- shards
+# -------------------------------------------------------------- manifest plan
 
-count_shards() {
-  # || true: under set -euo pipefail a not-yet-existing directory would make find
-  # exit non-zero, killing the script silently.
-  find "$1" -maxdepth 1 -name '*.safetensors' 2>/dev/null | wc -l | tr -d '[:space:]' || true
+plan_bytes() {
+  awk -F '\t' '{ total += $2 } END { printf "%.0f", total + 0 }'
+}
+
+plan_paths() {
+  awk -F '\t' 'NF == 3 { print $3 }'
+}
+
+plan_has_shard_problem() {
+  awk -F '\t' '$3 ~ /^model-[0-9]+-of-[0-9]+[.]safetensors$/ { found=1 } END { exit !found }'
 }
 
 # exclude_flags(): HF_EXCLUDE (comma-separated) -> the --exclude flags hf download supports.
 exclude_flags() {
   EXCLUDE_FLAGS=()
   if [ -n "${HF_EXCLUDE:-}" ]; then
+    python3 "$MANIFEST_TOOL" exclude-check "$MANIFEST" "$HF_EXCLUDE" >/dev/null \
+      || die "HF_EXCLUDE would omit files required by the pinned release manifest"
     local p
     IFS=',' read -r -a _pats <<<"$HF_EXCLUDE"
     for p in "${_pats[@]}"; do
@@ -149,12 +164,12 @@ exclude_flags() {
 # Not enough space -> print what has to be freed. This function NEVER deletes anything:
 # the cleanup is the owner's manual decision, the script only reports the shortfall.
 disk_fail() {
-  local target="$1" avail_gib="$2"
+  local target="$1" avail_gib="$2" needed_gib="$3" payload_gib="$4"
   cat >&2 <<EOF
 
-[fetch-fp8] ERROR: not enough space on $target (~${avail_gib} GiB free, >= 330 GiB required)
-Each node needs ~330 GiB free on the \$HOME filesystem: ~306 GiB of weights plus margin for
-the incomplete blobs the downloader writes while resuming.
+[fetch-fp8] ERROR: not enough space on $target (~${avail_gib} GiB free, >= ${needed_gib} GiB required)
+This release needs ~${payload_gib} GiB of missing/replacement files plus a 24 GiB margin for
+temporary downloader/rsync data. Existing manifest-matching files are reused in place.
 
 What can usually be freed, per node: old model checkpoints left over from previous runs and
 any drafter directory no longer referenced by cluster.env. Take a census first and decide
@@ -172,42 +187,74 @@ EOF
 # ------------------------------------------------------------ disk preflight
 
 check_disk_local() {
-  local avail_kb avail_gib
+  local payload_bytes="$1" avail_kb avail_gib needed_kb needed_gib payload_gib
+  [ "$payload_bytes" -gt 0 ] || return 0
   avail_kb=$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2{print $4}' || true)
   avail_gib=$(( ${avail_kb:-0} / 1024 / 1024 ))
-  [ "${avail_kb:-0}" -ge "$DISK_MIN_KB" ] || disk_fail "\$HOME su head (${HOSTS[0]})" "$avail_gib"
-  log "head · \$HOME: ${avail_gib} GiB free (ok, >= 330 required)"
+  needed_kb=$(( (payload_bytes + DISK_MARGIN_BYTES + 1023) / 1024 ))
+  needed_gib=$(( (needed_kb + 1024 * 1024 - 1) / 1024 / 1024 ))
+  payload_gib=$(( (payload_bytes + 1024 * 1024 * 1024 - 1) / 1024 / 1024 / 1024 ))
+  [ "${avail_kb:-0}" -ge "$needed_kb" ] || disk_fail "\$HOME on head (${HOSTS[0]})" "$avail_gib" "$needed_gib" "$payload_gib"
+  log "head · \$HOME: ${avail_gib} GiB free (ok, >= ${needed_gib} required for this delta)"
 }
 
 check_disk_remote() {
-  local host="$1" avail_kb avail_gib
+  local host="$1" payload_bytes="$2" avail_kb avail_gib needed_kb needed_gib payload_gib
+  [ "$payload_bytes" -gt 0 ] || return 0
   avail_kb=$(ssh "${SSH_OPTS[@]}" "$host" 'df -Pk "$HOME" | awk "NR==2{print \$4}"') \
-    || warn "$host: df failed (continuing anyway)"
+    || die "$host: df failed"
   avail_gib=$(( ${avail_kb:-0} / 1024 / 1024 ))
-  [ "${avail_kb:-0}" -ge "$DISK_MIN_KB" ] || disk_fail "\$HOME su $host" "$avail_gib"
-  log "$host · \$HOME: ${avail_gib} GiB free (ok, >= 330 required)"
+  needed_kb=$(( (payload_bytes + DISK_MARGIN_BYTES + 1023) / 1024 ))
+  needed_gib=$(( (needed_kb + 1024 * 1024 - 1) / 1024 / 1024 ))
+  payload_gib=$(( (payload_bytes + 1024 * 1024 * 1024 - 1) / 1024 / 1024 / 1024 ))
+  [ "${avail_kb:-0}" -ge "$needed_kb" ] || disk_fail "\$HOME on $host" "$avail_gib" "$needed_gib" "$payload_gib"
+  log "$host · \$HOME: ${avail_gib} GiB free (ok, >= ${needed_gib} required for this delta)"
 }
 
 # ------------------------------------------------------------- download head
 
 download_weights() {
-  local have
-  have="$(count_shards "$MODEL_DIR")"
-  if [ "${FORCE_FETCH:-0}" != "1" ] && [ "${REFRESH_WEIGHTS:-0}" != "1" ] && [ "$have" -ge "$EXPECTED_SHARDS" ]; then
-    log "weights already present: $MODEL_DIR ($have/$EXPECTED_SHARDS shards)"
+  local needed local_plan local_paths state size path
+  local -a fetch_files=() missing_files=() replace_files=()
+  mkdir -p "$MODEL_DIR"
+  local_plan=$(python3 "$MANIFEST_TOOL" plan "$MANIFEST" "$MODEL_DIR") \
+    || die "cannot inspect head snapshot against $MANIFEST"
+  if [ -z "$local_plan" ]; then
+    log "head · manifest verified ($EXPECTED_SHARDS shards, $EXPECTED_BYTES bytes); download skipped"
     return 0
   fi
-  local rev_args=()
-  if [ -n "$MODEL_REV" ]; then
-    rev_args=(--revision "$MODEL_REV")
+  if printf '%s\n' "$local_plan" | plan_has_shard_problem \
+     && { [ -f "$MODEL_DIR/config.json" ] || [ -f "$MODEL_DIR/$MARKER_NAME" ] \
+          || [ -f "$MODEL_DIR/.cache/huggingface/download/config.json.metadata" ]; } \
+     && [ "${FORCE_FETCH:-${REFRESH_WEIGHTS:-0}}" != "1" ]; then
+    printf '%s\n' "$local_plan" >&2
+    die "existing head snapshot has a missing/corrupt shard; refusing a large implicit repair (inspect above, then use FORCE_FETCH=1 deliberately)"
   fi
-  log "downloading $MODEL_REPO@$MARKER_KEY (~$EXPECTED_GIB GiB / $EXPECTED_SHARDS shards) into $MODEL_DIR (resumable)"
-  "${HF_CMD[@]}" download "$MODEL_REPO" ${rev_args[@]+"${rev_args[@]}"} \
-    --local-dir "$MODEL_DIR" ${EXCLUDE_FLAGS[@]+"${EXCLUDE_FLAGS[@]}"} \
-    || die "download of $MODEL_REPO failed (re-run it: hf resumes the incomplete blobs)"
-  have="$(count_shards "$MODEL_DIR")"
-  [ "$have" -ge "$EXPECTED_SHARDS" ] || die "download finished with $have/$EXPECTED_SHARDS shards"
-  log "recommended spot-check: sha256sum $MODEL_DIR/model-00022-of-00062.safetensors  (vs the HF page)"
+  needed=$(printf '%s\n' "$local_plan" | plan_bytes)
+  local_paths=$(printf '%s\n' "$local_plan" | plan_paths)
+  while IFS=$'\t' read -r state size path; do
+    [ -n "$path" ] || continue
+    fetch_files+=("$path")
+    if [ "$state" = MISSING ]; then missing_files+=("$path"); else replace_files+=("$path"); fi
+  done <<<"$local_plan"
+  check_disk_local "$needed"
+  hf_cmd
+  exclude_flags
+  log "head · downloading ${#fetch_files[@]} missing/mismatched manifest file(s) from $MODEL_REPO@$MODEL_REV"
+  if [ "${#missing_files[@]}" -gt 0 ]; then
+    "${HF_CMD[@]}" download "$MODEL_REPO" "${missing_files[@]}" --revision "$MODEL_REV" \
+      --local-dir "$MODEL_DIR" ${EXCLUDE_FLAGS[@]+"${EXCLUDE_FLAGS[@]}"} \
+      || die "download of missing files failed (re-run it: hf resumes incomplete blobs)"
+  fi
+  if [ "${#replace_files[@]}" -gt 0 ]; then
+    "${HF_CMD[@]}" download "$MODEL_REPO" "${replace_files[@]}" --revision "$MODEL_REV" \
+      --force-download --local-dir "$MODEL_DIR" ${EXCLUDE_FLAGS[@]+"${EXCLUDE_FLAGS[@]}"} \
+      || die "download of mismatched files failed; marker not updated"
+  fi
+  printf '%s\n' "$local_paths" \
+    | python3 "$MANIFEST_TOOL" verify "$MANIFEST" "$MODEL_DIR" --paths-from-stdin \
+    || die "downloaded files failed manifest verification; marker not updated"
+  log "head · complete manifest verified (unchanged files were hashed before download; changed files after it)"
 }
 
 # ----------------------------------------------------------- fan-out rsync
@@ -221,82 +268,109 @@ relay_probe() {
   ssh "${SSH_OPTS[@]}" "$RELAY_VIA" "$probe_cmd" >/dev/null 2>&1
 }
 
-# sync_weights_relay_rank2(): the rank-2 data leg executed FROM rank 1 (RELAY_VIA) over
-# the direct rank1->rank2 link (RELAY_DEST). Source and dest are RELATIVE: the remote
-# process CWD on rank 1 is its own home, so no literal '$HOME' ends up in the rsync
-# arguments. The rank-2 marker is ALWAYS written by the head over mgmt (control plane),
-# and only AFTER the leg succeeds.
+# Inspect a remote rank once. The plan is the list of missing/corrupt files; all files
+# absent from it have already passed size + SHA-256 verification.
+prepare_remote() {
+  local r="$1" dst_host marker have_remote installed_remote needed
+  dst_host="${HOSTS[$r]}"
+  marker="$MODEL_DIR_RAW/$MARKER_NAME"
+  REMOTE_PLAN=$(ssh "${SSH_OPTS[@]}" "$dst_host" \
+    "python3 \$HOME/tp4/scripts/model_manifest.py plan \$HOME/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR_RAW") \
+    || return 1
+  have_remote=$(ssh "${SSH_OPTS[@]}" "$dst_host" "cat $marker 2>/dev/null" || true)
+  installed_remote=$(ssh "${SSH_OPTS[@]}" "$dst_host" \
+    "test -f $MODEL_DIR_RAW/config.json -o -f $MODEL_DIR_RAW/.cache/huggingface/download/config.json.metadata && echo yes || true") \
+    || return 1
+  if [ -n "$REMOTE_PLAN" ] \
+     && printf '%s\n' "$REMOTE_PLAN" | plan_has_shard_problem \
+     && { [ -n "$have_remote" ] || [ "$installed_remote" = yes ]; } \
+     && [ "${FORCE_SYNC:-0}" != "1" ]; then
+    printf '%s\n' "$REMOTE_PLAN" >&2
+    warn "$dst_host: marked production snapshot has a missing/corrupt shard; refusing a large implicit repair (use FORCE_SYNC=1 deliberately)"
+    return 1
+  fi
+  REMOTE_PATHS=$(printf '%s\n' "$REMOTE_PLAN" | plan_paths)
+  needed=$(printf '%s\n' "$REMOTE_PLAN" | plan_bytes)
+  check_disk_remote "$dst_host" "$needed"
+}
+
+# Rank-2 data leg executed FROM rank 1 over the direct rank1->rank2 link. The
+# newline-delimited file list is supplied on stdin, so rsync cannot copy anything
+# outside the manifest delta.
 sync_weights_relay_rank2() {
-  if [ "$DRY_RUN" = "1" ]; then
-    log "[dry-run] rank2 · data leg VIA RELAY: ssh $RELAY_VIA → rsync → $RELAY_DEST"
-    log "[dry-run] ssh $RELAY_VIA \"rsync -a --partial --info=progress2 --exclude .cache --exclude $MARKER_NAME -e 'ssh ${SSH_OPTS[*]}' $REL_PATH_REL/ $RELAY_DEST:$REL_PATH_REL/\""
-    log "[dry-run] rank2 marker from the head over mgmt: ssh ${HOSTS[2]} \"mkdir -p $MODEL_DIR_RAW && printf '%s' '$MARKER_KEY' > $MODEL_DIR_RAW/$MARKER_NAME\""
+  if [ -z "$REMOTE_PATHS" ]; then
+    log "rank2 · manifest already matches; data transfer skipped"
     return 0
   fi
   local start
   start=$(date +%s)
   echo "### BEGIN glm53-fp8 relay-rank2 via $RELAY_VIA at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LOG"
-  ssh "${SSH_OPTS[@]}" "$RELAY_VIA" \
-    "rsync -a --partial --info=progress2 --exclude .cache --exclude $MARKER_NAME -e 'ssh ${SSH_OPTS[*]}' '$REL_PATH_REL/' '$RELAY_DEST:$REL_PATH_REL/'" >> "$LOG" 2>&1 \
+  printf '%s\n' "$REMOTE_PATHS" | ssh "${SSH_OPTS[@]}" "$RELAY_VIA" \
+    "rsync -a --partial --ignore-times --info=progress2 --files-from=- -e 'ssh ${SSH_OPTS[*]}' '$REL_PATH_REL/' '$RELAY_DEST:$REL_PATH_REL/'" >> "$LOG" 2>&1 \
     || return 1
   echo "### END glm53-fp8 relay-rank2 rc=0 elapsed_s=$(( $(date +%s) - start ))" >> "$LOG"
-  ssh "${SSH_OPTS[@]}" "${HOSTS[2]}" "mkdir -p $MODEL_DIR_RAW && printf '%s' '$MARKER_KEY' > $MODEL_DIR_RAW/$MARKER_NAME" || return 1
-  log "rank2 · weights synced via relay ($MARKER_KEY)"
+  log "rank2 · manifest delta synced via relay"
 }
 
-# sync_weights <rank>: copy the flat directory to the worker and write the marker.
-# Control plane (marker/mkdir) on HOSTS[rank] over mgmt; data plane (rsync) on
-# XFER[rank] (the CX-7 fabric if XFER_HOSTS says so, otherwise the same mgmt address).
+# Copy only REMOTE_PATHS to a worker. Control stays on HOSTS[rank] over mgmt;
+# the data plane uses XFER[rank].
 sync_weights() {
-  local r="$1" dst_host data_host marker
+  local r="$1" dst_host data_host
   dst_host="${HOSTS[$r]}"
   data_host="${XFER[$r]}"
-  marker="$MODEL_DIR_RAW/$MARKER_NAME"
-  if [ "$DRY_RUN" = "1" ]; then
-    if [ "$data_host" != "$dst_host" ]; then
-      log "[dry-run] rank $r · control(mgmt)=$dst_host · data-path(rsync)=$data_host  · via XFER_HOSTS"
-    else
-      log "[dry-run] rank $r · control(mgmt)=$dst_host · data-path(rsync)=$data_host"
-    fi
-    log "[dry-run] ssh $dst_host 'cat $marker 2>/dev/null'   # already aligned?"
-    log "[dry-run] rsync -a --partial --info=progress2 --exclude .cache --exclude $MARKER_NAME '$MODEL_DIR/' '$data_host:$REL_PATH_REL/'"
-    log "[dry-run] ssh $dst_host \"mkdir -p $MODEL_DIR_RAW && printf '%s' '$MARKER_KEY' > $marker\""
-    return 0
-  fi
-  local have_remote
-  have_remote="$(ssh "${SSH_OPTS[@]}" "$dst_host" "cat $marker 2>/dev/null" || true)"
-  if [ "${FORCE_SYNC:-0}" != "1" ] && [ "$have_remote" = "$MARKER_KEY" ]; then
-    log "$dst_host already aligned to $MARKER_KEY — rsync skipped (FORCE_SYNC=1 to force it)"
+  if [ -z "$REMOTE_PATHS" ]; then
+    log "$dst_host · manifest already matches; data transfer skipped"
     return 0
   fi
   if [ "$data_host" != "$dst_host" ]; then
     log "$dst_host · rsync data path via XFER_HOSTS: $data_host"
   fi
-  log "$dst_host · syncing weights to $MARKER_KEY (first copy is ~306 GiB: long)"
+  log "$dst_host · syncing manifest delta to $MARKER_KEY"
   ssh "${SSH_OPTS[@]}" "$dst_host" "mkdir -p $MODEL_DIR_RAW" || return 1
   local start
   start=$(date +%s)
   echo "### BEGIN glm53-fp8 -> $dst_host at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LOG"
-  # Dest relative to the home directory (the '$HOME/' prefix is stripped): rsync does
-  # NOT expand $HOME in a remote path — see the note on REL_PATH_REL.
-  rsync -a --partial --info=progress2 \
-    --exclude '.cache' --exclude "$MARKER_NAME" \
-    -e "ssh ${SSH_OPTS[*]}" "$MODEL_DIR/" "$data_host:$REL_PATH_REL/" >> "$LOG" 2>&1 || return 1
+  printf '%s\n' "$REMOTE_PATHS" | rsync -a --partial --ignore-times --info=progress2 --files-from=- \
+    -e "ssh ${SSH_OPTS[*]}" "$MODEL_DIR/" "$data_host:$REL_PATH_REL/" >> "$LOG" 2>&1 \
+    || return 1
   echo "### END glm53-fp8 rc=0 elapsed_s=$(( $(date +%s) - start ))" >> "$LOG"
-  ssh "${SSH_OPTS[@]}" "$dst_host" "printf '%s' '$MARKER_KEY' > $marker" || return 1
-  log "$dst_host · weights synced ($MARKER_KEY)"
+}
+
+verify_remote_delta() {
+  local host="$1"
+  if [ -n "$REMOTE_PATHS" ]; then
+    printf '%s\n' "$REMOTE_PATHS" | ssh "${SSH_OPTS[@]}" "$host" \
+      "python3 \$HOME/tp4/scripts/model_manifest.py verify \$HOME/tp4/node/model-manifests/$MODEL_REV.json $MODEL_DIR_RAW --paths-from-stdin" \
+      || return 1
+  fi
+  log "$host · complete manifest verified (unchanged files before transfer; delta after it)"
+}
+
+write_marker_local() {
+  local marker="$MODEL_DIR/$MARKER_NAME" tmp=""
+  tmp="${marker}.tmp.$$"
+  printf '%s\n' "$MARKER_KEY" > "$tmp"
+  mv "$tmp" "$marker"
+}
+
+write_marker_remote() {
+  local host="$1" marker="$MODEL_DIR_RAW/$MARKER_NAME"
+  ssh "${SSH_OPTS[@]}" "$host" \
+    "marker=$marker; tmp=\${marker}.tmp.\$\$; printf '%s\\n' '$MARKER_KEY' > \"\$tmp\" && mv \"\$tmp\" \"\$marker\""
 }
 
 # dry run: no mutating command is executed and no disk is touched; the ONLY ssh that
 # runs is the read-only relay probe (relay_probe), and only with RELAY_RANK2=1 — it is
 # what lets the script print the real shape the fan-out would take.
+exclude_flags
 if [ "$DRY_RUN" = "1" ]; then
   log "[dry-run] XFER_HOSTS: ${XFER_HOSTS:-<unset — data plane on mgmt, same as the control plane>}"
   if [ "$RELAY_RANK2" = "1" ]; then
     log "[dry-run] RELAY_RANK2=1 · via=$RELAY_VIA dest=$RELAY_DEST"
   fi
-  log "[dry-run] df -Pk \$HOME >= 330 GiB on every node ($NNODES), otherwise the disk-shortfall report"
-  log "[dry-run] hf download $MODEL_REPO ${MODEL_REV:+--revision $MODEL_REV} --local-dir $MODEL_DIR_RAW (~306 GiB, 62 shards expected: model-*-of-00062.safetensors${HF_EXCLUDE:+, excluded: $HF_EXCLUDE})"
+  log "[dry-run] hash all $EXPECTED_SHARDS shards and every metadata file against $MODEL_REV.json on all $NNODES ranks"
+  log "[dry-run] disk requirement per rank = bytes of missing/corrupt manifest files + 24 GiB (not a fixed full-snapshot threshold)"
+  log "[dry-run] hf download $MODEL_REPO <manifest-delta-files> --revision $MODEL_REV --local-dir $MODEL_DIR_RAW (force only mismatched files)"
   relay_active=0
   if [ "$RELAY_RANK2" = "1" ] && relay_probe; then
     relay_active=1
@@ -307,23 +381,15 @@ if [ "$DRY_RUN" = "1" ]; then
   for r in $(seq 1 $((NNODES - 1))); do
     log "=== rank $r · ${HOSTS[$r]} ==="
     if [ "$r" -eq 2 ] && [ "$relay_active" = "1" ]; then
-      sync_weights_relay_rank2
+      log "[dry-run] inspect over mgmt, then relay only manifest-delta files from $RELAY_VIA to $RELAY_DEST, then verify over mgmt"
     else
-      sync_weights "$r"
+      log "[dry-run] inspect over mgmt, rsync only manifest-delta files via ${XFER[$r]}, then verify over mgmt"
     fi
   done
+  log "[dry-run] only after every rank verifies: atomically replace $MARKER_NAME with $MODEL_REV on each rank"
   log "[dry-run] done — no mutating command was executed"
   exit 0
 fi
-
-hf_cmd
-exclude_flags
-
-# Disk preflight: the head (local, for the download) and then EVERY node (fan-out).
-check_disk_local
-for r in $(seq 1 $((NNODES - 1))); do
-  check_disk_remote "${HOSTS[$r]}"
-done
 
 download_weights
 
@@ -332,20 +398,37 @@ for r in $(seq 1 $((NNODES - 1))); do
   LOG="$HOME/xfer-fp8-${host}.log"
   : > "$LOG"
   log "=== rank $r · $host ==="
+  REMOTE_PLAN=""; REMOTE_PATHS=""
+  prepare_remote "$r" \
+    || { warn "$host: manifest inspection failed; no markers updated"; exit 1; }
   if [ "$r" -eq 2 ] && [ "$RELAY_RANK2" = "1" ]; then
     if relay_probe; then
-      if sync_weights_relay_rank2 && echo "### XFER_COMPLETE" >> "$LOG"; then
+      if sync_weights_relay_rank2 && verify_remote_delta "$host" && echo "### XFER_COMPLETE" >> "$LOG"; then
         continue
       fi
-      warn "rank2: relay leg failed — log: $LOG (re-run it: it resumes)"
+      warn "rank2: relay/verification failed — log: $LOG; no markers updated (re-run it: transfer resumes)"
       exit 1
     else
       warn "rank2: relay probe failed ($RELAY_VIA cannot reach $RELAY_DEST) — fallback: rank2 leg over mgmt"
     fi
   fi
-  sync_weights "$r" \
-    || { warn "$host: weight rsync failed — log: $LOG (re-run it: it resumes)"; exit 1; }
+  sync_weights "$r" && verify_remote_delta "$host" \
+    || { warn "$host: transfer/verification failed — log: $LOG; no markers updated (re-run it: transfer resumes)"; exit 1; }
   echo "### XFER_COMPLETE" >> "$LOG"
 done
 
-log "FP8 weights ready on $NNODES nodes"
+log "all $NNODES ranks verified; atomically updating each rank's revision marker"
+markers_updated=0
+for r in $(seq 1 $((NNODES - 1))); do
+  if write_marker_remote "${HOSTS[$r]}"; then
+    markers_updated=$((markers_updated + 1))
+  else
+    die "${HOSTS[$r]}: atomic marker update failed after $markers_updated/$NNODES ranks; snapshot files are verified but markers may be partial — do not restart, resolve connectivity, then rerun this same pinned command"
+  fi
+done
+if write_marker_local; then
+  markers_updated=$((markers_updated + 1))
+else
+  die "rank 0: atomic marker update failed after $markers_updated/$NNODES ranks; snapshot files are verified but markers are partial — do not restart, fix the local marker path, then rerun this same pinned command"
+fi
+log "FP8 snapshot $MODEL_REV ready on $NNODES ranks"

@@ -29,8 +29,8 @@ set -euo pipefail
 # The six phases, all idempotent:
 #   1 packages    rdma-core / ibverbs-utils, docker GPU support, /dev/infiniband, the pinned
 #                 kernel and `apt-mark hold` on the version-locked packages that are actually
-#                 installed (node/bootstrap/versions.env)
-#   2 sudoers     /etc/sudoers.d/99-tp4-nopasswd rendered from node/etc/common/99-tp4-nopasswd.example
+#                 installed (scripts/node/bootstrap/versions.env)
+#   2 sudoers     /etc/sudoers.d/99-tp4-nopasswd rendered from scripts/node/etc/common/99-tp4-nopasswd.example
 #                 with the node's own user. The ONLY phase that can need an interactive sudo
 #                 password, and therefore the FIRST thing --apply does: every other phase (and
 #                 deploy-host.sh) needs `sudo -n`. On a fresh node the run says so and asks for
@@ -38,13 +38,14 @@ set -euo pipefail
 #   3 /etc        the managed set, pushed by `scripts/deploy-host.sh --etc --host <alias>`, which
 #                 installs (additively, sha256-verified, no activation): the host scripts into
 #                 ~/tp4/host/, the grub drop-ins into /etc/default/grub.d/, the per-node netplan
-#                 into /etc/netplan/40-cx7.yaml (0600), 98-tp4-fabric.conf and 99-tp4-vm.conf into
-#                 /etc/sysctl.d/ (0644), tp4-fabric-iptables.sh into /usr/local/sbin/ (0755), its
-#                 unit into /etc/systemd/system/ (0644) and the rendered sudoers into
+#                 into /etc/netplan/40-cx7.yaml (0600), its rank-local interface environment into
+#                 /etc/default/tp4-fabric-iptables (0644), 98-tp4-fabric.conf and 99-tp4-vm.conf
+#                 into /etc/sysctl.d/ (0644), tp4-fabric-iptables.sh into /usr/local/sbin/ (0755),
+#                 its unit into /etc/systemd/system/ (0644) and the rendered sudoers into
 #                 /etc/sudoers.d/99-tp4-nopasswd (0440, visudo -cf on the node first). It stages
 #                 through ~/tp4/host/ and needs passwordless sudo.
-#                 Activation (`netplan apply`, `sysctl --system`, `systemctl enable --now
-#                 tp4-fabric-iptables`) belongs to THIS script, happens only under --apply, is
+#                 Activation (`netplan apply`, `sysctl --system`, and daemon-reload plus
+#                 enable/restart of tp4-fabric-iptables) belongs to THIS script, happens only under --apply, is
 #                 announced as DISRUPTIVE, and is GATED: every /etc destination must match the
 #                 repo content first, and `netplan generate` must succeed before `netplan apply`.
 #   4 ssh mesh    rank 0 only: ed25519 key (passphrase-less), its pubkey in the authorized_keys of
@@ -52,7 +53,7 @@ set -euo pipefail
 #                 host keys in rank 0's known_hosts, BatchMode login, and the same login user on
 #                 every node (the autostart unit hard-codes one user for all four ranks).
 #   5 layout      ~/tp4 ~/tp4/host ~/tp4/moe-configs ~/patches ~/nccl-patched ~/vllm-cache
-#   6 autostart   rank 0 only: node/tp4-autostart.service.example rendered into
+#   6 autostart   rank 0 only: scripts/node/tp4-autostart.service.example rendered into
 #                 /etc/systemd/system/tp4-autostart.service, daemon-reload, enable (NOT start).
 #
 # Template comparisons (sudoers, autostart unit) are made on the sha256 of the file with comment
@@ -89,15 +90,15 @@ pre_die()   { echo "$TP4_LOG_TAG ERROR: $*" >&2; exit 3; }
 
 # --- recipe: sourced BEFORE the arguments are parsed, so cluster.env can never clobber
 # --- ALIAS / RANK / MODE / TMP (the parsed values are assigned after this point).
-[ -f "$REPO/cluster.env" ] || pre_die "cluster.env missing: copy cluster.env.example and fill it — see README § Site configuration"
+[ -f "$REPO/cluster.env" ] || pre_die "cluster.env missing: copy cluster.env.example and fill it — see README § Start here"
 # --require adds the recipe validation of scripts/lib/common.sh (empty key, unfilled
 # `<...>` placeholder, site key still holding cluster.env.example's dummy value). It dies
 # with exit 1, not with the exit 3 of the preconditions above, which is why the
 # missing-file case keeps its own pre_die here.
 tp4_load_env "$REPO" --require
-VERSIONS="$REPO/node/bootstrap/versions.env"
-[ -f "$VERSIONS" ] || pre_die "node/bootstrap/versions.env missing"
-# shellcheck source=../node/bootstrap/versions.env
+VERSIONS="$REPO/scripts/node/bootstrap/versions.env"
+[ -f "$VERSIONS" ] || pre_die "scripts/node/bootstrap/versions.env missing"
+# shellcheck source=node/bootstrap/versions.env
 . "$VERSIONS"
 
 read -r -a NODE_ARR <<<"${NODES:-}"
@@ -156,7 +157,7 @@ case "$ALIAS" in *[!A-Za-z0-9._-]*) usage_die "alias must match [A-Za-z0-9._-]+ 
 ITEM_IDS_ALL="pkg-rdma-core pkg-ibverbs-utils docker-gpu dev-infiniband kernel nvidia-driver
 kernel-packages kernel-holds sudoers-file sudo-nopasswd etc-netplan etc-98-tp4-fabric.conf
 etc-99-tp4-vm.conf etc-tp4-fabric-iptables.sh etc-tp4-fabric-iptables.service
-etc-zz-tp4-perf.cfg grub-cfg deploy-host-flags netplan-active sysctl-active iptables-unit
+etc-tp4-fabric-iptables etc-zz-tp4-perf.cfg grub-cfg deploy-host-flags netplan-active sysctl-active iptables-unit
 ssh-key mesh-rank0 mesh-rank1 mesh-rank2 mesh-rank3 layout-dirs autostart-unit autostart-enabled"
 for _p in $PHASE_SEL; do
   case " $PHASES_ALL " in *" $_p "*) ;; *) usage_die "--phase: unknown phase '$_p' (known: $PHASES_ALL)" ;; esac
@@ -352,7 +353,7 @@ echo "kpkg-unheld=$unheld"
     add PASS packages "nvidia-driver ($driver)" nvidia-driver -
   else
     add FAIL packages "nvidia-driver ($driver != pinned)" nvidia-driver \
-      "# driver drift on $ALIAS: node has '$driver', node/bootstrap/versions.env pins DRIVER=$DRIVER"
+      "# driver drift on $ALIAS: node has '$driver', scripts/node/bootstrap/versions.env pins DRIVER=$DRIVER"
   fi
 
   absent=$(fact kpkg-absent); absent=${absent# }
@@ -375,12 +376,12 @@ echo "kpkg-unheld=$unheld"
 # =======================================================================================
 # phase 2 — sudoers (the only interactive-sudo phase, applied first)
 # =======================================================================================
-SUDOERS_SRC="$REPO/node/etc/common/99-tp4-nopasswd.example"
+SUDOERS_SRC="$REPO/scripts/node/etc/common/99-tp4-nopasswd.example"
 SUDOERS_DST=/etc/sudoers.d/99-tp4-nopasswd
 
 phase_sudoers() {
   local want got remote
-  [ -f "$SUDOERS_SRC" ] || pre_die "node/etc/common/99-tp4-nopasswd.example missing: create it from node/etc/common/99-tp4-nopasswd replacing the user name with <USER>"
+  [ -f "$SUDOERS_SRC" ] || pre_die "scripts/node/etc/common/99-tp4-nopasswd.example missing"
   render "$SUDOERS_SRC" "$TMP/99-tp4-nopasswd"
   want=$(norm_sha_sudoers "$TMP/99-tp4-nopasswd")
 
@@ -423,18 +424,20 @@ phase_sudoers() {
 # phase 3 — /etc assets (pushed by deploy-host.sh) + gated activation
 # =======================================================================================
 ETC_PAIRS=(
-  "node/etc/common/98-tp4-fabric.conf:/etc/sysctl.d/98-tp4-fabric.conf"
-  "node/etc/common/99-tp4-vm.conf:/etc/sysctl.d/99-tp4-vm.conf"
-  "node/etc/common/tp4-fabric-iptables.sh:/usr/local/sbin/tp4-fabric-iptables.sh"
-  "node/etc/common/tp4-fabric-iptables.service:/etc/systemd/system/tp4-fabric-iptables.service"
+  "scripts/node/etc/common/98-tp4-fabric.conf:/etc/sysctl.d/98-tp4-fabric.conf"
+  "scripts/node/etc/common/99-tp4-vm.conf:/etc/sysctl.d/99-tp4-vm.conf"
+  "scripts/node/etc/common/tp4-fabric-iptables.sh:/usr/local/sbin/tp4-fabric-iptables.sh"
+  "scripts/node/etc/common/tp4-fabric-iptables.service:/etc/systemd/system/tp4-fabric-iptables.service"
+  "scripts/node/etc/$ALIAS/tp4-fabric-iptables.env:/etc/default/tp4-fabric-iptables"
 )
 # The grub drop-in is part of the same push but NOT of the activation gate: it cannot make
 # `netplan apply` unsafe, and it is legitimately absent on a node where tp4-iommu.sh --revert
 # left its sentinel.
-GRUB_SRC_REL="node/etc/default/grub.d/zz-tp4-perf.cfg"
+GRUB_SRC_REL="scripts/node/etc/default/grub.d/zz-tp4-perf.cfg"
 GRUB_DST=/etc/default/grub.d/zz-tp4-perf.cfg
 GRUB_SENTINEL=/etc/default/grub.d/.zz-tp4-perf.cfg.reverted
 NETPLAN_SRC=""
+FABRIC_ENV_SRC=""
 DEPLOY_HOST_FIX=""
 
 # remote probe: sha256 of every destination in $1 (space separated) + the grub sentinel +
@@ -444,8 +447,10 @@ etc_probe_cmd() {
 }
 
 etc_precondition() {
-  NETPLAN_SRC="$REPO/node/etc/$ALIAS/40-cx7.yaml"
-  [ -f "$NETPLAN_SRC" ] || pre_die "node/etc/$ALIAS/40-cx7.yaml missing: create node/etc/$ALIAS/40-cx7.yaml from node/etc/40-cx7.yaml.example"
+  NETPLAN_SRC="$REPO/scripts/node/etc/$ALIAS/40-cx7.yaml"
+  FABRIC_ENV_SRC="$REPO/scripts/node/etc/$ALIAS/tp4-fabric-iptables.env"
+  [ -f "$NETPLAN_SRC" ] || pre_die "scripts/node/etc/$ALIAS/40-cx7.yaml missing: run scripts/render-netplan.sh --write"
+  [ -f "$FABRIC_ENV_SRC" ] || pre_die "scripts/node/etc/$ALIAS/tp4-fabric-iptables.env missing: run scripts/render-netplan.sh --write"
   DEPLOY_HOST_FIX="scripts/deploy-host.sh --etc --host $ALIAS"
 }
 
@@ -500,6 +505,7 @@ etc_drift() {
 
 phase_etc() {
   local entry src dst want got out remote drift ifaces addrs n_if n_addr keys rc dsts sentinel grubcfg
+  local enabled active reload iptables_inputs_drift=0
   etc_precondition
 
   if [ "$NOPASSWD" != yes ]; then
@@ -538,6 +544,10 @@ phase_etc() {
       add PASS etc "$dst" "etc-${dst##*/}" -
     else
       add TODO etc "$dst" "etc-${dst##*/}" "$DEPLOY_HOST_FIX"
+      case "$dst" in
+        /etc/default/tp4-fabric-iptables|/usr/local/sbin/tp4-fabric-iptables.sh|/etc/systemd/system/tp4-fabric-iptables.service)
+          iptables_inputs_drift=1 ;;
+      esac
     fi
   done
 
@@ -591,7 +601,7 @@ phase_etc() {
       "ssh $ALIAS \"sudo -n netplan apply\"  # DISRUPTIVE: renegotiates the CX-7 fabric ports"
   fi
 
-  keys=$(cat "$REPO/node/etc/common/98-tp4-fabric.conf" "$REPO/node/etc/common/99-tp4-vm.conf" \
+  keys=$(cat "$REPO/scripts/node/etc/common/98-tp4-fabric.conf" "$REPO/scripts/node/etc/common/99-tp4-vm.conf" \
          | sed -n 's|^\([a-z0-9._]*\)[[:space:]]*=[[:space:]]*\(.*\)$|\1=\2|p')
   remote="KEYS='$(printf '%s' "$keys" | tr '\n' ' ')'
 "'
@@ -614,15 +624,19 @@ echo "sysctl-bad=$bad"
       "ssh $ALIAS \"sudo -n sysctl --system\"  # DISRUPTIVE: reloads every sysctl drop-in"
   fi
 
-  rc=0; cap "$ALIAS" 'echo "$(systemctl is-enabled tp4-fabric-iptables 2>&1) $(systemctl is-active tp4-fabric-iptables 2>&1)"' || rc=$?
-  if [ "$rc" != 0 ] || [ -z "$CAP_OUT" ]; then
+  rc=0
+  cap "$ALIAS" 'enabled=$(systemctl is-enabled tp4-fabric-iptables 2>&1 || :); active=$(systemctl is-active tp4-fabric-iptables 2>&1 || :); reload=$(systemctl show -p NeedDaemonReload --value tp4-fabric-iptables 2>&1) || exit $?; printf "enabled=%s active=%s reload=%s\n" "$enabled" "$active" "$reload"' || rc=$?
+  enabled=$(printf '%s\n' "$CAP_OUT" | sed -n 's/^enabled=\([^ ]*\) active=.*/\1/p')
+  active=$(printf '%s\n' "$CAP_OUT" | sed -n 's/^enabled=[^ ]* active=\([^ ]*\) reload=.*/\1/p')
+  reload=$(printf '%s\n' "$CAP_OUT" | sed -n 's/^enabled=[^ ]* active=[^ ]* reload=\([^ ]*\)$/\1/p')
+  if [ "$rc" != 0 ] || [ -z "$enabled" ] || [ -z "$active" ] || { [ "$reload" != yes ] && [ "$reload" != no ]; }; then
     add FAIL etc "tp4-fabric-iptables (state unreadable)" iptables-unit \
       "ssh $ALIAS \"systemctl status tp4-fabric-iptables\"  # probe failed: $(cap_diag)"
-  elif [ "$CAP_OUT" = "enabled active" ]; then
-    add PASS etc "tp4-fabric-iptables ($CAP_OUT)" iptables-unit -
+  elif [ "$enabled" = enabled ] && [ "$active" = active ] && [ "$reload" = no ] && [ "$iptables_inputs_drift" = 0 ]; then
+    add PASS etc "tp4-fabric-iptables (enabled active, reload=no)" iptables-unit -
   else
-    add TODO etc "tp4-fabric-iptables ($CAP_OUT)" iptables-unit \
-      "ssh $ALIAS \"sudo -n systemctl daemon-reload && sudo -n systemctl enable --now tp4-fabric-iptables\"  # DISRUPTIVE: inserts DOCKER-USER rules"
+    add TODO etc "tp4-fabric-iptables ($enabled $active, reload=$reload, inputs-drift=$iptables_inputs_drift)" iptables-unit \
+      "ssh $ALIAS \"sudo -n systemctl daemon-reload && sudo -n systemctl enable tp4-fabric-iptables && { if systemctl is-active --quiet tp4-fabric-iptables; then sudo -n systemctl restart tp4-fabric-iptables; else sudo -n systemctl start tp4-fabric-iptables; fi; }\"  # DISRUPTIVE: refreshes DOCKER-USER rules"
   fi
 }
 
@@ -765,12 +779,12 @@ echo "missing=$m"
 # =======================================================================================
 # phase 6 — autostart unit, rank 0 only
 # =======================================================================================
-AUTOSTART_SRC="$REPO/node/tp4-autostart.service.example"
+AUTOSTART_SRC="$REPO/scripts/node/tp4-autostart.service.example"
 AUTOSTART_DST=/etc/systemd/system/tp4-autostart.service
 
 phase_autostart() {
   local want got rc
-  [ -f "$AUTOSTART_SRC" ] || pre_die "node/tp4-autostart.service.example missing"
+  [ -f "$AUTOSTART_SRC" ] || pre_die "scripts/node/tp4-autostart.service.example missing"
   render "$AUTOSTART_SRC" "$TMP/tp4-autostart.service"
   want=$(norm_sha "$TMP/tp4-autostart.service")
 
@@ -786,7 +800,7 @@ phase_autostart() {
       add PASS autostart "$AUTOSTART_DST" autostart-unit -
     else
       add TODO autostart "$AUTOSTART_DST" autostart-unit \
-        "$SELF --apply  # phase 6 renders node/tp4-autostart.service.example and installs it (enable, never start)"
+        "$SELF --apply  # phase 6 renders scripts/node/tp4-autostart.service.example and installs it (enable, never start)"
     fi
   fi
 
@@ -908,8 +922,8 @@ apply_item() {
       rsh "$ALIAS" 'sudo -n sysctl --system' || rc=$? ;;
     iptables-unit)
       guard_activation "$id" || return 1
-      log "apply $id: DISRUPTIVE — systemctl enable --now tp4-fabric-iptables on $ALIAS (DOCKER-USER rules)"
-      rsh "$ALIAS" 'sudo -n systemctl daemon-reload && sudo -n systemctl enable --now tp4-fabric-iptables' || rc=$? ;;
+      log "apply $id: DISRUPTIVE — daemon-reload + enable + restart/start tp4-fabric-iptables on $ALIAS (refreshes DOCKER-USER rules)"
+      rsh "$ALIAS" 'sudo -n systemctl daemon-reload && sudo -n systemctl enable tp4-fabric-iptables && { if systemctl is-active --quiet tp4-fabric-iptables; then sudo -n systemctl restart tp4-fabric-iptables; else sudo -n systemctl start tp4-fabric-iptables; fi; }' || rc=$? ;;
     ssh-key)
       log "apply $id: ssh-keygen -t ed25519 on $ALIAS"
       rsh "$ALIAS" 'ssh-keygen -t ed25519 -N "" -f $HOME/.ssh/id_ed25519' || rc=$? ;;

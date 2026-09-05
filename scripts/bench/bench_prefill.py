@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Long-prompt prefill bench for A/B passes on the TP4 cluster.
 
-Reuse of the needle-in-a-haystack idea from docs/gate.md: a deterministic filler
+Needle-in-a-haystack gate described in docs/bench.md: a deterministic filler
 (sentence repeated) sized to ~N tokens, with a needle planted at a random
 position and a unique salt added to every run, so the server-side prefix cache
 cannot leak between runs.

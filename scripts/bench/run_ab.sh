@@ -4,7 +4,7 @@
 #   prefill ~30k, prefill ~100k.
 # <label> is the variant under test, e.g. baseline | candidate.
 # Results go to bench-results/<timestamp>-<pid>-<label>.json and a NEUTRAL delta
-# table vs the gate.md production baseline is printed (no verdicts: the owner
+# table vs the public production baseline is printed (no verdicts: the owner
 # sets the decision criteria after seeing all variants — use compare.py to line
 # them up). Env overrides:
 #   BENCH_URL and BENCH_MODEL (default: http://$MASTER_IP:$API_PORT and $SERVED_NAME
@@ -58,20 +58,16 @@ PREFILL_SMALL="${PREFILL_SMALL:-30000}"
 PREFILL_LARGE="${PREFILL_LARGE:-100000}"
 LONG_DECODE="${LONG_DECODE:-0}"
 
-# Production confirmation 2026-09-04 13:19-13:35, adaptive-k v1, two passes —
-# docs/gate.md, section "Baseline — 2026-09-04 (adaptive draft length v1, current
-# production recipe)": mean of the medians of two clean run_ab passes on the plain
-# cluster.env recipe (SPEC_TOKENS=5 + AdaptiveKScheduler + hybrid GB10 MoE config +
-# hosts in iommu.passthrough=1), bench-results/20260904-{131930-80337,132504-81995}-
-# prod-2026-09-04-adaptive-k*.json. Noise on that baseline: ±3-5% on 3-run decode
-# medians, ±2-3% on prefill; the c4 aggregate is bimodal at k>=5 and is the noisiest
-# of the six. Used only as the neutral delta column, not as a decision gate.
-BASE_DECODE_STRUCTURED=71.0   # decode structured x1 (per stream; 71.4 / 70.6)
-BASE_DECODE_PROSE=40.3        # decode prose x1 (per stream; 40.3 / 40.4)
-BASE_DECODE_C4=228.5          # decode structured x4, aggregate tok/s (239.5 / 217.4)
-BASE_DECODE_LONG=63.4         # decode @1400 (count 1->3000; 63.0 / 63.7)
-BASE_PREFILL_SMALL=2189.7     # prefill ~30k tok (2187.5 / 2192.0)
-BASE_PREFILL_LARGE=2209.3     # prefill ~100k tok (2208.5 / 2210.2)
+# Production reference 2026-09-05, adaptive-k recipe, two clean rank-0 loopback
+# passes. docs/bench.md publishes the method and limits. Values are the mean of each
+# pass median; noise is ±3-5% on three-run decode medians and ±2-3% on prefill.
+# Used only as a neutral delta column, never as an automatic decision gate.
+BASE_DECODE_STRUCTURED=72.5
+BASE_DECODE_PROSE=41.4
+BASE_DECODE_C4=201.9
+BASE_DECODE_LONG=60.9
+BASE_PREFILL_SMALL=2195.1
+BASE_PREFILL_LARGE=2213.7
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -201,8 +197,8 @@ rows += [
 
 fmt = lambda v: "FAILED" if v is None else f"{v:.1f}"
 print()
-print(f"== A/B pass '{label}' — delta vs the production baseline 2026-09-04 "
-      "(docs/gate.md, section 'Baseline — 2026-09-04 (current recipe)') ==")
+print(f"== A/B pass '{label}' — delta vs the public 2026-09-05 production reference "
+      "(docs/bench.md, section 'Public reference — 2026-09-05') ==")
 print("baseline col = mean of two clean passes on the cluster.env recipe; "
       "noise ±3-5% on decode medians, ±2-3% on prefill")
 print(f"{'test':34} {'this run':>10} {'baseline':>12}  {'delta':>8}  note")
