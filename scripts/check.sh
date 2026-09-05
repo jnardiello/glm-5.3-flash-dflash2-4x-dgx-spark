@@ -82,6 +82,7 @@ doc_count=$(find docs -type f -name '*.md' | wc -l | tr -d ' ')
 
 ./scripts/tests/test-agent-preflight.sh
 ./scripts/tests/test-host-lifecycle.sh
+bash ./scripts/tests/test-controller-lifecycle.sh
 python3 scripts/tests/test-model-snapshot.py
 python3 scripts/tests/test-chat-template.py
 python3 scripts/node/patches/test_adaptive_k_policy.py

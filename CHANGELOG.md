@@ -45,6 +45,11 @@ release.
 
 ### Fixed
 
+- Made lifecycle commands fail closed on unverifiable rank, container, or flusher state;
+  failed starts now clean all four ranks, and effective overlays cannot change TP4
+  cardinality or the configured container name.
+- Rejected out-of-range, malformed, and ambiguous leading-zero fabric IPv4 addresses
+  before netplan generation.
 - Made help, deploy discovery, and offline tests tolerate optional internal profiling,
   collective microbenchmark, MoE tuning, and publication tooling being absent.
 - Updated public links and source comments after the documentation consolidation.

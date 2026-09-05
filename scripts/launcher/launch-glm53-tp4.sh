@@ -49,40 +49,51 @@ fi
 # shellcheck source=../cluster.env
 . "$ENV_DIR/cluster.env"
 
-# MINIMAL recipe guard. the launcher is SELF-CONTAINED (see the note above): it cannot use
-# scripts/lib/common.sh, which carries the full key-by-key validation. What it repeats here
-# is the cheap half — an unfilled `<...>` placeholder, an empty site key, or the well-known
-# dummy values cluster.env.example ships (aliases gx10-a..d, RFC 5737 addresses
-# 192.0.2.11..14) — so a template copied but never filled cannot reach `docker run`.
-case "${NODES:-} ${MGMT_IPS:-} ${MASTER_IP:-} ${RELAY_DEST:-}" in
-  *'<'*'>'*)
-    echo "[launch] ERROR: cluster.env: a <...> placeholder is still unfilled — see README § Start here" >&2
-    exit 1 ;;
-esac
-if [ -z "${NODES:-}" ] || [ -z "${MGMT_IPS:-}" ] || [ -z "${MASTER_IP:-}" ]; then
-  echo "[launch] ERROR: cluster.env: NODES, MGMT_IPS and MASTER_IP must all be set — see README § Start here" >&2
-  exit 1
-fi
-if [ "$NODES" = "gx10-a gx10-b gx10-c gx10-d" ] \
-   || [ "$MGMT_IPS" = "192.0.2.11 192.0.2.12 192.0.2.13 192.0.2.14" ] \
-   || [ "$MASTER_IP" = "192.0.2.11" ]; then
-  echo "[launch] ERROR: cluster.env: NODES/MGMT_IPS/MASTER_IP still have the example values — see README § Start here" >&2
-  exit 1
-fi
-# Cardinality, the same check scripts/lib/common.sh does for the workstation-side scripts:
-# NODES and MGMT_IPS are POSITIONAL (index = rank) and this is a 4-node TP4 lane, so a list of
-# a different length silently gives a rank another rank's address; MASTER_IP is by definition
-# rank 0's management address. Counts only, no value is printed.
-read -r -a _GUARD_NODES <<<"$NODES"
-read -r -a _GUARD_MGMT <<<"$MGMT_IPS"
-if [ "${#_GUARD_NODES[@]}" -ne 4 ] || [ "${#_GUARD_MGMT[@]}" -ne 4 ]; then
-  echo "[launch] ERROR: cluster.env: NODES (${#_GUARD_NODES[@]} entries) and MGMT_IPS (${#_GUARD_MGMT[@]}) must have 4 entries each, one per rank — see README § Start here" >&2
-  exit 1
-fi
-if [ "$MASTER_IP" != "${_GUARD_MGMT[0]}" ]; then
-  echo "[launch] ERROR: cluster.env: MASTER_IP must be MGMT_IPS[0] (the rendez-vous runs on rank 0) — see README § Start here" >&2
-  exit 1
-fi
+# MINIMAL recipe guard. The launcher is deployed by itself, so keep this self-contained.
+# Validate both the production recipe and the effective recipe after a delta overlay.
+validate_recipe_shape() {
+  local scope=$1 fabric_count=0
+  local -a guard_nodes guard_mgmt
+  case "${NODES:-} ${MGMT_IPS:-} ${MASTER_IP:-} ${RELAY_DEST:-}" in
+    *'<'*'>'*)
+      echo "[launch] ERROR: $scope: a <...> placeholder is still unfilled — see README § Start here" >&2
+      exit 1 ;;
+  esac
+  if [ -z "${NODES:-}" ] || [ -z "${MGMT_IPS:-}" ] || [ -z "${MASTER_IP:-}" ]; then
+    echo "[launch] ERROR: $scope: NODES, MGMT_IPS and MASTER_IP must all be set — see README § Start here" >&2
+    exit 1
+  fi
+  if [ "$NODES" = "gx10-a gx10-b gx10-c gx10-d" ] \
+     || [ "$MGMT_IPS" = "192.0.2.11 192.0.2.12 192.0.2.13 192.0.2.14" ] \
+     || [ "$MASTER_IP" = "192.0.2.11" ]; then
+    echo "[launch] ERROR: $scope: NODES/MGMT_IPS/MASTER_IP still have the example values — see README § Start here" >&2
+    exit 1
+  fi
+  read -r -a guard_nodes <<<"$NODES"
+  read -r -a guard_mgmt <<<"$MGMT_IPS"
+  if [ "${#guard_nodes[@]}" -ne 4 ] || [ "${#guard_mgmt[@]}" -ne 4 ]; then
+    echo "[launch] ERROR: $scope: NODES (${#guard_nodes[@]} entries) and MGMT_IPS (${#guard_mgmt[@]}) must have 4 entries each, one per rank — see README § Start here" >&2
+    exit 1
+  fi
+  if [ "$MASTER_IP" != "${guard_mgmt[0]}" ]; then
+    echo "[launch] ERROR: $scope: MASTER_IP must be MGMT_IPS[0] (the rendez-vous runs on rank 0) — see README § Start here" >&2
+    exit 1
+  fi
+  if ! [[ "${CONTAINER:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "[launch] ERROR: $scope: CONTAINER is not a valid Docker container name" >&2
+    exit 1
+  fi
+  if declare -p FABRIC_TARGETS >/dev/null 2>&1; then
+    fabric_count=${#FABRIC_TARGETS[@]}
+  fi
+  if [ "$fabric_count" -ne 4 ]; then
+    echo "[launch] ERROR: $scope: FABRIC_TARGETS has $fabric_count entries, expected exactly 4 (one per rank) — see README § Start here" >&2
+    exit 1
+  fi
+}
+
+validate_recipe_shape "cluster.env"
+BASE_CONTAINER=${CONTAINER-}
 if [ -n "${TP4_ENV:-}" ]; then
   case "$TP4_ENV" in
     /*)    echo "[launch] ERROR: TP4_ENV must be a relative path (got: $TP4_ENV)" >&2; exit 1 ;;
@@ -95,6 +106,10 @@ if [ -n "${TP4_ENV:-}" ]; then
   # shellcheck disable=SC1090
   . "$ENV_DIR/$TP4_ENV"
 fi
+
+[ "${CONTAINER-}" = "$BASE_CONTAINER" ] \
+  || { echo "[launch] ERROR: TP4_ENV must not change CONTAINER" >&2; exit 1; }
+validate_recipe_shape "effective configuration after TP4_ENV"
 
 # Node-side copy of scripts/lib/common.sh's rank-local hardware resolver. The launcher is
 # deployed by itself and must stay self-contained. A non-empty *_BY_RANK array must have

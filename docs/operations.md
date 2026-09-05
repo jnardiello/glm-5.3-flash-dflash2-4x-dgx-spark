@@ -93,6 +93,8 @@ ssh <ALIAS_RANK0> 'systemctl status tp4-autostart tp4-fabric-iptables --no-pager
 Expected: one coherent four-rank stack, `/health` 200, green fabric, all signatures,
 and no unexpected active `tp4-flusher` after readiness. Stop on any missing signature,
 unreachable rank, or health mismatch. `/v1/models` is never a readiness check.
+`tp4ctl status` exits nonzero unless it can verify the configured container running on
+all four ranks and receive `/health` 200.
 
 ## Deploy a repository or recipe change
 
@@ -134,9 +136,18 @@ Stop the stack immediately if a gate fails.
 ```
 
 `up`, `down`, `restart`, and `poweroff` are disruptive. Never restart a single rank:
-it cannot rejoin the existing communicator. `up` refuses a degraded fabric, starts
-the page-cache flusher, removes stale containers, launches workers before rank 0,
-waits for `/health`, and stops the flusher. `poweroff` asks interactively and leaves
+it cannot rejoin the existing communicator. `up` refuses a degraded fabric, requires
+the page-cache flusher active on all ranks, verifies stale containers absent, launches
+workers before rank 0, waits for `/health`, and verifies the flusher stopped. A failed
+prerequisite or partial flusher start occurs before teardown and leaves an existing
+serving stack alone. Once prelaunch teardown begins, a teardown or launch error,
+readiness timeout, interruption, or failed final flusher stop triggers a best-effort
+full four-rank container teardown and flusher shutdown, then returns failure.
+
+`down` attempts both stop operations on every rank and succeeds only after it verifies
+the configured container and flusher absent everywhere; an already absent container or
+flusher is successful. `restart` and `poweroff` stop before starting or powering off
+anything when that verification is incomplete. `poweroff` asks interactively and leaves
 rank 0 until last.
 
 Expected after `up`: readiness and all gates. Expected after `down`: no matching
@@ -158,6 +169,11 @@ TP4_ENV=path/to/window.env ./scripts/tp4ctl down
 Use the same `TP4_ENV` on every command in that window. Keep `CONTAINER` unchanged so
 plain production commands still find exactly one stack. To leave the window, restart
 with no `TP4_ENV`; the base recipe is sourced again.
+
+The controller and launcher revalidate the merged recipe before remote work: `NODES`,
+`MGMT_IPS`, `FABRIC_TARGETS`, and any `TP4_HOSTS` resolution remain exactly four ranks,
+`MASTER_IP` remains the first management address, and an overlay cannot change
+`CONTAINER`.
 
 Expected: the overlay changes only listed keys and the boot signatures identify the
 intended recipe. Stop on a missing overlay, changed container name, or failed gate.

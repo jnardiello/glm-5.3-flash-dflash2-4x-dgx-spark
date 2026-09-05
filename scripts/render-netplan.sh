@@ -106,6 +106,20 @@ while [ "$n" -lt "$NNODES" ]; do
   n=$((n + 1))
 done
 
+# Accept only unambiguous IPv4 dotted quads. Leading-zero octets are rejected rather
+# than interpreted differently by different network tools.
+valid_ipv4() {
+  local address=$1 octet
+  local -a octets
+  [[ "$address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a octets <<<"$address"
+  [ "${#octets[@]}" -eq 4 ] || return 1
+  for octet in "${octets[@]}"; do
+    case "$octet" in 0[0-9]*) return 1 ;; esac
+    [ "$octet" -le 255 ] || return 1
+  done
+}
+
 # --- split each FABRIC_TARGETS entry into "subnet towards the next rank" / "towards the
 # previous rank", by the peer's node number (last octet = rank + 1) ---
 SUB_NEXT=()
@@ -120,10 +134,8 @@ while [ "$n" -lt "$NNODES" ]; do
   sub_next=""
   sub_prev=""
   for peer in "${PEERS[@]}"; do
-    case "$peer" in
-      [0-9]*.[0-9]*.[0-9]*.[0-9]*) : ;;
-      *) die "FABRIC_TARGETS[$n]: '$peer' is not a dotted-quad address" ;;
-    esac
+    valid_ipv4 "$peer" \
+      || die "FABRIC_TARGETS[$n]: '$peer' is not an unambiguous IPv4 dotted-quad address"
     host=${peer##*.}
     if [ "$host" = "$((next + 1))" ]; then
       sub_next=${peer%.*}

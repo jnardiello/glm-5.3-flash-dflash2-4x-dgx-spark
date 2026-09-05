@@ -46,8 +46,10 @@ $EDITOR cluster.env
 ```
 
 The renderer enforces four ranks, two neighbor addresses per rank, one /24 per link,
-matching subnets at both ends, and the rank 0→1→2→3→0 port convention. `RELAY_DEST`
-must remain the rank-2 address reachable directly from rank 1 for weight fan-out.
+matching subnets at both ends, and the rank 0→1→2→3→0 port convention. Every address
+must contain exactly four decimal octets from 0 through 255; leading-zero octets are
+rejected as ambiguous. `RELAY_DEST` must remain the rank-2 address reachable directly
+from rank 1 for weight fan-out.
 
 Expected: all eight generated files match and the deploy audit shows only the intended
 network drift. Stop on any topology disagreement or unreviewed management-address

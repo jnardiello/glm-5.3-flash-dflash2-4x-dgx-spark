@@ -50,8 +50,9 @@ comment and blank lines ignored — and the `FABRIC_TARGETS` the plan implies eq
 ## Consistency checks (all fatal)
 
 * `NODES`, `FABRIC_TARGETS`: exactly 4 entries each — the renderer implements the 4-node ring.
-* Each entry lists exactly two dotted-quad peers whose last octets are the two neighbouring
-  ranks + 1 (a wrong node number is named explicitly in the error).
+* Each entry lists exactly two IPv4 dotted-quad peers with decimal octets in `0..255` and
+  no ambiguous leading zeroes. Their last octets are the two neighbouring ranks + 1 (a
+  wrong node number is named explicitly in the error).
 * Both ends of a link must agree on its `/24` (rank `n`'s "next" link is rank `n+1`'s "prev").
 * The implied `FABRIC_TARGETS` block is printed and compared with `cluster.env`'s, per rank.
 
