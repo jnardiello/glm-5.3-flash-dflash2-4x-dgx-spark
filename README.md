@@ -1,11 +1,13 @@
-# GLM-5.3-Flash on four NVIDIA GB10 nodes
+# GLM-5.3-Flash FP8 on four NVIDIA GB10 nodes (switchless)
 
 [![Follow me on X](https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/jnardiello)
 
 This repository installs and operates one vLLM tensor-parallel cluster serving
-GLM-5.3-Flash FP8 across four NVIDIA GB10 systems. It was verified on four ASUS
-Ascent GX10 nodes connected as a switchless ConnectX-7 RoCE ring. Other GB10
-systems may need different interface, HCA, GID, renderer, or package settings.
+GLM-5.3-Flash FP8 across four NVIDIA GB10 systems. Four verified ASUS Ascent GX10
+nodes connect directly through a switchless ConnectX-7 RoCE fabric with no dedicated
+network switch. Management and API access use a separate Ethernet or trusted VPN
+path. Other GB10 systems may need different interface, HCA, GID, renderer, or package
+settings.
 
 **Configured context window: 256K (262,144 tokens).** See `MAX_MODEL_LEN` in
 [`cluster.env.example`](cluster.env.example).

@@ -19,6 +19,9 @@ release.
 
 ### Changed
 
+- Renamed the repository from `GLM-5.3-Flash-FP8-4-DGX-Spark` to
+  `GLM-5.3-Flash-FP8-4-DGX-Spark-Switchless` and clarified that its verified
+  ConnectX-7 fabric connects the nodes directly without a dedicated network switch.
 - Renamed the repository from `tp4-glm53-fp8-gx10` to
   `GLM-5.3-Flash-FP8-4-DGX-Spark`.
 - Centered the README tables for clearer presentation on GitHub.
