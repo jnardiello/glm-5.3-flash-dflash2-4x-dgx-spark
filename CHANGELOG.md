@@ -20,6 +20,8 @@ release.
   the repository and agent entry points.
 - Moved the controller, launcher, and public node assets under `scripts/` while
   preserving their installed paths on cluster hosts.
+- Moved the remaining ignored node configuration and operator tools under
+  `scripts/node/`, leaving no root-level `node/` directory.
 - Documented `scripts/node/` as the source of files installed on cluster hosts, including
   runtime patches, host configuration, model manifests, and the patched NCCL build.
 - Published the 2026-09-05 loopback benchmark aggregate and its method limits without

@@ -8,7 +8,7 @@ export PYTHONDONTWRITEBYTECODE=1
 public_path() {
   case "$1" in
     ./.git/*|./.claude/*|./bench-results/*|./experiments/*|./reports/*|./todo/*|\
-    ./node/moe-tune/*|./node/nccl-bench/*|./node/host/nsys-entry.sh|\
+    ./scripts/node/moe-tune/*|./scripts/node/nccl-bench/*|./scripts/node/host/nsys-entry.sh|\
     ./scripts/prof-capture.sh|./scripts/nccl-bench.sh|./scripts/mirror-snapshot.sh|\
     ./scripts/mirror-allow.txt|./scripts/mirror-private-terms.example)
       return 1 ;;

@@ -19,8 +19,8 @@ SKIP_DIRS = {
     "todo",
 }
 SKIP_PREFIXES = {
-    Path("node/moe-tune"),
-    Path("node/nccl-bench"),
+    Path("scripts/node/moe-tune"),
+    Path("scripts/node/nccl-bench"),
 }
 LINK_RE = re.compile(r"!?\[[^\]]*\]\((<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)")
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")

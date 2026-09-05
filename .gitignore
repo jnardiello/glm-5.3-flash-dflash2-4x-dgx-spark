@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 .ruff_cache/
 .claude/settings.local.json
-node/moe-tune/triton-cache/
 
 # --- Site configuration: created by the user from public templates, never committed.
 /cluster.env
@@ -16,13 +15,6 @@ scripts/node/etc/*/
 scripts/node/etc/common/99-tp4-nopasswd
 scripts/node/tp4-autostart.service
 scripts/node/ssh-config
-# Preserve pre-relocation local site copies without publishing them.
-node/etc/*/
-!node/etc/common/
-!node/etc/default/
-node/etc/common/99-tp4-nopasswd
-node/tp4-autostart.service
-node/ssh-config
 scripts/mirror-private-terms.txt
 .claude/
 
@@ -35,9 +27,9 @@ scripts/mirror-private-terms.txt
 # Operator-only tools retained locally but excluded from the public repository.
 /scripts/prof-capture.sh
 /scripts/nccl-bench.sh
-/node/moe-tune/
-/node/nccl-bench/
-/node/host/nsys-entry.sh
+/scripts/node/moe-tune/
+/scripts/node/nccl-bench/
+/scripts/node/host/nsys-entry.sh
 /scripts/mirror-snapshot.sh
 /scripts/mirror-allow.txt
 /scripts/mirror-private-terms.example

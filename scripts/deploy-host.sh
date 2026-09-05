@@ -144,10 +144,8 @@ if [ -n "$RUN_SCRIPT" ]; then
   case "$RUN_SCRIPT" in
     *..*) echo "[deploy-host] ERROR: --run must not contain '..' (got: $RUN_SCRIPT)" >&2; exit 2 ;;
   esac
-  if [ ! -f "$REPO/scripts/node/host/$RUN_SCRIPT" ]; then
-    [ "$RUN_SCRIPT" = nsys-entry.sh ] && [ -f "$REPO/node/host/nsys-entry.sh" ] \
-      || { echo "[deploy-host] ERROR: --run $RUN_SCRIPT: scripts/node/host/$RUN_SCRIPT does not exist" >&2; exit 1; }
-  fi
+  [ -f "$REPO/scripts/node/host/$RUN_SCRIPT" ] \
+    || { echo "[deploy-host] ERROR: --run $RUN_SCRIPT: scripts/node/host/$RUN_SCRIPT does not exist" >&2; exit 1; }
   if [ "$RUN_MODE" = --status ] && [ "$RUN_SCRIPT" != tp4-iommu.sh ]; then
     echo "[deploy-host] ERROR: --status supports only tp4-iommu.sh; $RUN_SCRIPT may mutate host state while reporting status" >&2
     exit 2
@@ -250,10 +248,6 @@ HOST_SCRIPTS=()
 for f in "$REPO"/scripts/node/host/*.sh; do
   if [ -f "$f" ]; then HOST_SCRIPTS+=("$f"); fi
 done
-# Preserve the optional private profiler entrypoint at its ignored pre-relocation path.
-if [ -f "$REPO/node/host/nsys-entry.sh" ]; then
-  HOST_SCRIPTS+=("$REPO/node/host/nsys-entry.sh")
-fi
 
 # The managed /etc set, identical on every node: "<repo path>|<destination>|<mode>".
 # The two per-node files (netplan, sudoers) are resolved host by host below.

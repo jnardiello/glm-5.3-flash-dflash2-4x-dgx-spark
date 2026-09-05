@@ -137,16 +137,16 @@ fi
 # Explicit list, not a bare glob: only the runtime assets belong on the nodes. README.md,
 # editor leftovers and __pycache__/ stay in the repo.
 nccl_count=0
-if [ -f "$REPO/node/nccl-bench/entry.sh" ]; then
-  FILES+=("node/nccl-bench/entry.sh:tp4/nccl-bench/entry.sh")
+if [ -f "$REPO/scripts/node/nccl-bench/entry.sh" ]; then
+  FILES+=("scripts/node/nccl-bench/entry.sh:tp4/nccl-bench/entry.sh")
   nccl_count=$((nccl_count + 1))
   # entry.sh is the container entrypoint: it must be executable and syntax-valid.
   EXECUTABLES="$EXECUTABLES tp4/nccl-bench/entry.sh"
   SHELL_SCRIPTS="$SHELL_SCRIPTS tp4/nccl-bench/entry.sh"
 fi
-for f in "$REPO"/node/nccl-bench/*.py; do
+for f in "$REPO"/scripts/node/nccl-bench/*.py; do
   [ -f "$f" ] || continue
-  FILES+=("node/nccl-bench/${f##*/}:tp4/nccl-bench/${f##*/}")
+  FILES+=("scripts/node/nccl-bench/${f##*/}:tp4/nccl-bench/${f##*/}")
   nccl_count=$((nccl_count + 1))
 done
 [ "$nccl_count" -eq 0 ] || REMOTE_DIRS+=(tp4/nccl-bench)
@@ -156,13 +156,13 @@ done
 # and stays on the workstation, like README.md and __pycache__/.
 moetune_count=0
 for f in run-tune.sh benchmark_moe_noray.py merge-configs.py; do
-  [ -f "$REPO/node/moe-tune/$f" ] || continue
-  FILES+=("node/moe-tune/$f:tp4/moe-tune/$f")
+  [ -f "$REPO/scripts/node/moe-tune/$f" ] || continue
+  FILES+=("scripts/node/moe-tune/$f:tp4/moe-tune/$f")
   moetune_count=$((moetune_count + 1))
 done
 if [ "$moetune_count" -gt 0 ]; then
   REMOTE_DIRS+=(tp4/moe-tune)
-  if [ -f "$REPO/node/moe-tune/run-tune.sh" ]; then
+  if [ -f "$REPO/scripts/node/moe-tune/run-tune.sh" ]; then
     # The driver is launched by hand on the node: executable and syntax-valid.
     EXECUTABLES="$EXECUTABLES tp4/moe-tune/run-tune.sh"
     SHELL_SCRIPTS="$SHELL_SCRIPTS tp4/moe-tune/run-tune.sh"
@@ -174,7 +174,8 @@ sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 # Nothing is copied before the whole list is known-good: a source that disappeared would
 # otherwise abort the run mid-node (sha_of on a missing file, `set -o pipefail`), and a
 # .py with a syntax error would reach the container. This covers EVERY .py that travels:
-# public scripts/node/patches/, optional node/nccl-bench/ and node/moe-tune/, and the indexer patch.
+# public scripts/node/patches/, optional scripts/node/nccl-bench/ and
+# scripts/node/moe-tune/, and the indexer patch.
 for entry in "${FILES[@]}"; do
   src=${entry%%:*}
   [ -f "$REPO/$src" ] || { warn "source missing, refusing to run: $REPO/$src"; exit 1; }
