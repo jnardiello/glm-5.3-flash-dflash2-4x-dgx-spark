@@ -1,11 +1,18 @@
 # GLM-5.3-Flash on four NVIDIA GB10 nodes
 
+[![Follow me on X](https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/jnardiello)
+
 This repository installs and operates one vLLM tensor-parallel cluster serving
 GLM-5.3-Flash FP8 across four NVIDIA GB10 systems. It was verified on four ASUS
 Ascent GX10 nodes connected as a switchless ConnectX-7 RoCE ring. Other GB10
 systems may need different interface, HCA, GID, renderer, or package settings.
 
+**Configured context window: 256K (262,144 tokens).** See `MAX_MODEL_LEN` in
+[`cluster.env.example`](cluster.env.example).
+
 ## Benchmark results
+
+<div align="center">
 
 | Benchmark | Baseline (tok/s) | Current (tok/s) | Improvement |
 | --- | ---: | ---: | ---: |
@@ -16,12 +23,16 @@ systems may need different interface, HCA, GID, renderer, or package settings.
 | Prefill ~30K | 1907.6 | 2195.1 | +15.1% |
 | Prefill ~100K | 2085.2 | 2213.7 | +6.2% |
 
+</div>
+
 Current values describe the repository recipe on four ASUS GX10 nodes. The baseline
 is the fixed initial-campaign configuration and does not roll forward. This is a
 historical comparison between configurations; see
 [`docs/bench.md`](docs/bench.md) for the protocol, secondary metrics, and limits.
 
 ## Hardware
+
+<div align="center">
 
 | Item | Verified configuration |
 | --- | --- |
@@ -30,6 +41,8 @@ historical comparison between configurations; see
 | Fabric | one ConnectX-7 per node, two addressed ports, 4 × QSFP28 DAC, 200 Gb/s, MTU 9000 |
 | Topology | closed ring: rank 0 ↔ 1 ↔ 2 ↔ 3 ↔ 0, one private /24 per link |
 | Management | separate Ethernet or trusted VPN path for SSH and the rank-0 API |
+
+</div>
 
 All site addresses and hardware selections belong in the gitignored `cluster.env`.
 [`cluster.env.example`](cluster.env.example) is the annotated source for every
@@ -102,6 +115,8 @@ GLM-5.3-Flash reasoning mode. The official request values remain `low`, `high`, 
 
 ## Documentation
 
+<div align="center">
+
 | Need | Read |
 | --- | --- |
 | Install from OS + driver + Docker, including image and weights | [`docs/install-from-zero.md`](docs/install-from-zero.md) |
@@ -111,6 +126,8 @@ GLM-5.3-Flash reasoning mode. The official request values remain `low`, `high`, 
 | Run acceptance gates or reproducible benchmarks; read public results | [`docs/bench.md`](docs/bench.md) |
 | Understand files copied to the nodes | [`scripts/node/README.md`](scripts/node/README.md) |
 | Rebuild and install the patched NCCL library | [`scripts/node/nccl/README.md`](scripts/node/nccl/README.md) |
+
+</div>
 
 Changes are recorded incrementally in [`CHANGELOG.md`](CHANGELOG.md). Attribution
 and third-party terms are in [`CREDITS.md`](CREDITS.md); original project material

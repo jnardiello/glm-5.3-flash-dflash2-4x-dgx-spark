@@ -8,6 +8,7 @@ release.
 
 ### Added
 
+- Added a README badge linking to the maintainer's X profile.
 - Added this changelog and made a matching `Unreleased` entry mandatory for future
   code, configuration, and documentation changes.
 - Added one offline validation command for syntax, links, command help, model
@@ -16,6 +17,11 @@ release.
 
 ### Changed
 
+- Renamed the repository from `tp4-glm53-fp8-gx10` to
+  `GLM-5.3-Flash-FP8-4-DGX-Spark`.
+- Centered the README tables for clearer presentation on GitHub.
+- Documented the configured 256K (262,144-token) context window in the README and
+  corrected the GitHub About description.
 - Consolidated operator documentation into five task-oriented guides and shortened
   the repository and agent entry points.
 - Moved the controller, launcher, and public node assets under `scripts/` while
