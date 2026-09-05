@@ -8,6 +8,8 @@ release.
 
 ### Added
 
+- Documented the workload priorities and the quality, prefill-throughput, and prose
+  non-regression requirements.
 - Added a README badge linking to the maintainer's X profile.
 - Added this changelog and made a matching `Unreleased` entry mandatory for future
   code, configuration, and documentation changes.

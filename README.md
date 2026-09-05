@@ -30,6 +30,13 @@ is the fixed initial-campaign configuration and does not roll forward. This is a
 historical comparison between configurations; see
 [`docs/bench.md`](docs/bench.md) for the protocol, secondary metrics, and limits.
 
+## Assumptions
+
+GLM-5.3-Flash is my daily driver for heavy coding workloads and extensive parallel
+subagent use. This repository optimizes the deployment for those workloads, with
+output quality as a non-negotiable requirement. Optimizations must also preserve
+prefill throughput and the quality and speed of prose generation.
+
 ## Hardware
 
 <div align="center">
