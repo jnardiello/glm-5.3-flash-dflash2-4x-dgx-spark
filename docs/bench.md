@@ -148,19 +148,43 @@ same-window baseline, and gains outside the observed noise band: roughly ±3–5
 three-run decode medians and ±2–3% for prefill. Single runs can vary by about ±7%.
 The harness prints neutral deltas; the owner makes the promotion decision.
 
-## Public reference — 2026-09-05
+## Reference method and secondary metrics
 
-These results describe the current pinned target snapshot and the same image, weights,
-four-GX10 TP4 topology, DFlash2 adaptive policy, and host recipe documented in
+The fixed baseline and six headline metrics are maintained only in
+[`README.md` § Benchmark results](../README.md#benchmark-results). The baseline is the
+initial campaign configuration and does not roll forward when the current recipe
+changes.
+
+The current reference campaign was measured on 2026-09-05 with the pinned target
+snapshot, image, weight shards, four-GX10 TP4 topology, DFlash2 adaptive k=3/5 policy,
+and 262144×6 context/sequence setting documented in
 [`production-recipe.md`](production-recipe.md). The client ran on rank 0 against
-`localhost:8000` after workstation-network runs were discarded. Two passes used the
-standard warm-up and three-run medians; 100K prefill used two measured runs per pass.
-The published value is the mean of the two pass medians.
+`localhost:8000` after workstation-network runs were discarded. Two passes used a
+discarded warm-up and three-run medians; 100K prefill used two measured runs per pass.
+Each published current value is the mean of the two pass medians.
 
-The canonical headline table is maintained in
-[`README.md` § Benchmark results](../README.md#benchmark-results). One of the six
-sustained requests ended after 724 output tokens instead of reaching the 1400-token
-limit; retain that limitation when comparing the published median-of-medians.
+The fixed baseline comes from the initial 2026-09-02 campaign: DFlash2 k=3, async off,
+a 524288×4 context/sequence setting, workstation-to-LAN requests, historical
+single-pass medians, and a different warm-up method. Thinking off was declared in that
+campaign but not proven effective. The snapshot and local chat template also changed.
+This is a historical comparison between configurations, not a controlled A/B, so the
+differences cannot be assigned to one model or engine change.
+
+The README percentages use raw medians before display rounding. Its prose and code
+headline values come from separate prompt runs; the standard-harness prose result
+below is a distinct measurement.
+
+Secondary metrics retained outside the headline table are:
+
+| Secondary metric | Fixed baseline | Current reference | Historical change |
+| --- | ---: | ---: | ---: |
+| Prose decode, standard harness | 35.6 tok/s | 41.4 tok/s | +16.2% |
+| Four-stream per stream | 33.6 tok/s | 52.1 tok/s | +55.1% |
+| Sustained decode, 1400-token limit | not measured | 60.9 tok/s | — |
+
+One of the six current sustained requests ended after 724 output tokens instead of
+reaching the 1400-token limit; retain that limitation when comparing the published
+median-of-medians.
 
 The two passes recovered the 30K needle in 3/3 and 2/3 requests, and the 100K needle
 in 2/2 and 1/2. Each missing literal was an accepted model refusal; those requests
@@ -177,12 +201,9 @@ a discarded warm-up and with a cached-prefix follow-up:
 | 200K | 2174.1 tok/s | 91.99 s | 32.7 tok/s | 2.84 s | 2/2 · 2/2 |
 | 250K | 2143.8 tok/s | 116.59 s | 33.5 tok/s | 2.69 s | 1/1 · 1/1 |
 
-The comparison to earlier published measurements is historical, not a controlled A/B:
-the client moved from the workstation LAN to rank-0 loopback, the target snapshot and
-chat template changed, and old runs did not prove thinking was disabled. Differences
-must not be attributed to a model or engine improvement. Endpoint-idle checks,
-speculative counters, rank-0 concurrency logs, and four-node thermal snapshots passed;
-they cannot exclude foreign traffic that left no trace in the samples.
+Endpoint-idle checks, speculative counters, rank-0 concurrency logs, and four-node
+thermal snapshots passed; they cannot exclude foreign traffic that left no trace in
+the samples.
 
 ## Promotion record
 

@@ -26,6 +26,8 @@ release.
   runtime patches, host configuration, model manifests, and the patched NCCL build.
 - Published the 2026-09-05 loopback benchmark aggregate and its method limits without
   private paths, raw logs, or node addresses.
+- Reworked the README benchmark summary into a six-metric comparison against a fixed
+  initial baseline, with protocol limits and secondary metrics kept in `docs/bench.md`.
 - Consolidated attribution and third-party terms in `CREDITS.md`.
 - Recorded the permanent project rule to run checks locally and never use GitHub
   Actions.

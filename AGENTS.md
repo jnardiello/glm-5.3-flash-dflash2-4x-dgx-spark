@@ -74,9 +74,12 @@ When the owner explicitly authorizes a release, rename `Unreleased` to that vers
 and actual date, then open a new empty `Unreleased` section. Do not version, commit,
 or publish automatically.
 
-Run `./scripts/check.sh` before handoff. Accepted performance changes must also update
-the public baseline in `README.md`, any relevant `cluster.env.example` rollback, and
-the appropriate boot signature in `docs/operations.md`.
+Run `./scripts/check.sh` before handoff. Any recipe change that may affect performance
+enters the repository only together with new verified benchmarks and an updated public
+benchmark table in `README.md`. Also update any relevant `cluster.env.example`
+rollback and the appropriate boot signature in `docs/operations.md`. Purely editorial
+changes are exempt from the benchmark requirement, but still require a changelog entry
+and the offline check.
 
 Do not introduce or use GitHub Actions or workflow files in this repository. Run the
 required validation locally with `./scripts/check.sh`.
